@@ -1,6 +1,6 @@
 
 ```bash
-cat > ~/Final_Project/Secure-API-Gateway-with-Cryptographic-Enforcement/README.md << 'EOF'
+
 # Secure API Gateway with Cryptographic Enforcement
 
 ## 📌 Mô tả đồ án
