@@ -1,0 +1,11 @@
+pyjwt[crypto]>=2.8.0
+cryptography>=41.0.0
+requests>=2.31.0
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-dotenv>=1.0.0
+httpx>=0.25.0
+locust>=2.17.0
+prometheus-client>=0.19.0
+opentelemetry-api>=1.21.0
+opentelemetry-sdk>=1.21.0

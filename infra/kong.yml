@@ -1,0 +1,9 @@
+_format_version: "3.0"
+services:
+- name: backend
+  url: http://172.17.0.1:5000    # dùng IP của host trên mạng docker0 (thay nếu cần)
+  routes:
+  - name: api-route
+    paths:
+    - /api
+    strip_path: false

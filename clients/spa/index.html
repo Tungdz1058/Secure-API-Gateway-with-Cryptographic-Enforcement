@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API Gateway Demo</title>
+    <style>
+        body { font-family: monospace; margin: 40px; }
+        pre { background: #eee; padding: 10px; overflow-x: auto; }
+        button { margin: 5px; padding: 8px 16px; }
+        .user-info { border: 1px solid #ccc; padding: 10px; margin: 20px 0; }
+        hr { margin: 20px 0; }
+    </style>
+</head>
+<body>
+<h2>Secure API Gateway with Cryptographic Enforcement</h2>
+<div>
+    <button id="loginBtn">Login (PKCE)</button>
+    <button id="callApiBtn" disabled>Call API</button>
+    <button id="logoutBtn" disabled>Logout</button>
+</div>
+
+<div id="userInfo" class="user-info" style="display:none;">
+    <h3>User Information</h3>
+    <p><strong>Username:</strong> <span id="username"></span></p>
+    <p><strong>Email:</strong> <span id="email"></span></p>
+    <p><strong>Name:</strong> <span id="name"></span></p>
+    <p><strong>Subject ID:</strong> <span id="sub"></span></p>
+</div>
+
+<h3>Tokens (raw)</h3>
+<pre id="tokenDisplay">(not logged in)</pre>
+
+<h3>API Response</h3>
+<pre id="apiResponse"></pre>
+
+<script>
+    const KEYCLOAK_URL = 'http://localhost:8080';
+    const REALM = 'api-gateway-demo';
+    const CLIENT_ID = 'api-spa';
+    const REDIRECT_URI = 'http://localhost:3000';
+    const API_URL = 'http://localhost:8000/api/public';
+
+    let accessToken = null;
+    let idToken = null;
+
+    function decodeJwt(token) {
+        try {
+            let payload = token.split('.')[1];
+            payload = payload.replace(/-/g, '+').replace(/_/g, '/');
+            return JSON.parse(atob(payload));
+        } catch(e) { return null; }
+    }
+
+    function displayUserInfo(idToken) {
+        const data = decodeJwt(idToken);
+        if (data) {
+            document.getElementById('username').innerText = data.preferred_username || data.sub;
+            document.getElementById('email').innerText = data.email || '-';
+            document.getElementById('name').innerText = data.name || '-';
+            document.getElementById('sub').innerText = data.sub;
+            document.getElementById('userInfo').style.display = 'block';
+        }
+    }
+
+    function generateCodeVerifier() {
+        const array = new Uint8Array(32);
+        crypto.getRandomValues(array);
+        return btoa(String.fromCharCode(...array)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+    }
+
+    async function generateCodeChallenge(verifier) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(verifier);
+        const digest = await crypto.subtle.digest('SHA-256', data);
+        return btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+    }
+
+    document.getElementById('loginBtn').onclick = async () => {
+        const verifier = generateCodeVerifier();
+        const challenge = await generateCodeChallenge(verifier);
+        sessionStorage.setItem('pkce_verifier', verifier);
+        const authUrl = `${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/auth` +
+            `?client_id=${CLIENT_ID}` +
+            `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
+            `&response_type=code` +
+            `&scope=openid profile email` +
+            `&code_challenge_method=S256` +
+            `&code_challenge=${challenge}`;
+        window.location.href = authUrl;
+    };
+
+    async function handleCallback() {
+        const params = new URLSearchParams(window.location.search);
+        const code = params.get('code');
+        if (code) {
+            const verifier = sessionStorage.getItem('pkce_verifier');
+            if (!verifier) return;
+            const tokenUrl = `${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/token`;
+            const body = new URLSearchParams();
+            body.append('client_id', CLIENT_ID);
+            body.append('grant_type', 'authorization_code');
+            body.append('code', code);
+            body.append('redirect_uri', REDIRECT_URI);
+            body.append('code_verifier', verifier);
+            const resp = await fetch(tokenUrl, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+            const data = await resp.json();
+            if (data.access_token) {
+                accessToken = data.access_token;
+                idToken = data.id_token;
+                document.getElementById('tokenDisplay').innerText = JSON.stringify(data, null, 2);
+                document.getElementById('callApiBtn').disabled = false;
+                document.getElementById('logoutBtn').disabled = false;
+                displayUserInfo(idToken);
+                window.history.replaceState({}, document.title, window.location.pathname);
+            } else {
+                document.getElementById('tokenDisplay').innerText = 'Error: ' + JSON.stringify(data);
+            }
+        }
+    }
+
+    document.getElementById('callApiBtn').onclick = async () => {
+        if (!accessToken) return;
+        try {
+            const resp = await fetch(API_URL, { headers: { 'Authorization': `Bearer ${accessToken}` } });
+            const text = await resp.text();
+            document.getElementById('apiResponse').innerText = text;
+        } catch(err) {
+            document.getElementById('apiResponse').innerText = 'API call failed: ' + err.message;
+        }
+    };
+
+    document.getElementById('logoutBtn').onclick = () => {
+        accessToken = null;
+        idToken = null;
+        document.getElementById('tokenDisplay').innerText = '(logged out)';
+        document.getElementById('callApiBtn').disabled = true;
+        document.getElementById('logoutBtn').disabled = true;
+        document.getElementById('userInfo').style.display = 'none';
+        document.getElementById('apiResponse').innerText = '';
+    };
+
+    handleCallback();
+</script>
+</body>
+</html>
