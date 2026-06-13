@@ -2,52 +2,50 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import jwt
-import requests
 import redis
 import hmac
 import hashlib
 import os
+import requests
 from datetime import datetime, timezone
 from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
 
 app = FastAPI()
 
-# CORS - cho phép website gọi API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000", "https://*.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Redis connection
+AUTH0_DOMAIN = os.environ.get("AUTH0_DOMAIN", "apigatewaysecure.us.auth0.com")
+AUTH0_CLIENT_ID = os.environ.get("AUTH0_CLIENT_ID", "5GkSY8Xk4oNRpJysIWx35UCyeInC0Vs3")
+JWKS_URL = f"https://{AUTH0_DOMAIN}/.well-known/jwks.json"
+
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 try:
-    redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+    redis_client = redis.from_url(REDIS_URL, decode_responses=True)
     redis_client.ping()
     USE_REDIS = True
     print("[OK] Redis connected")
 except Exception as e:
     USE_REDIS = False
-    print(f"[WARN] Redis not available: {e}")
     nonce_store = {}
-
-# JWT config
-JWKS_URL = "http://localhost:8080/realms/api-gateway-demo/protocol/openid-connect/certs"
-ISSUER = "http://localhost:8080/realms/api-gateway-demo"
-AUDIENCE = "account"
-jwks_client = jwt.PyJWKClient(JWKS_URL)
+    print(f"[WARN] Redis not available: {e}")
 
 HMAC_SECRET = os.environ.get("HMAC_SECRET", "my-secret-key-change-in-production").encode()
+jwks_client = jwt.PyJWKClient(JWKS_URL)
 
 def verify_jwt(token: str) -> dict:
     signing_key = jwks_client.get_signing_key_from_jwt(token)
     payload = jwt.decode(
         token,
         signing_key.key,
-        algorithms=["RS256", "RS384", "RS512", "ES256"],
-        audience=AUDIENCE,
-        issuer=ISSUER,
+        algorithms=["RS256"],
+        audience=AUTH0_CLIENT_ID,
+        issuer=f"https://{AUTH0_DOMAIN}/",
         options={"verify_exp": True}
     )
     return payload
@@ -60,7 +58,6 @@ async def public_endpoint(
     x_nonce: str = Header(None),
     x_signature: str = Header(None),
 ):
-    # 1. JWT (bat buoc)
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Authorization header")
     token = authorization.split(" ")[1]
@@ -72,7 +69,6 @@ async def public_endpoint(
     except InvalidTokenError as e:
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
     
-    # 2. HMAC (neu co headers)
     hmac_verified = False
     if x_timestamp and x_nonce and x_signature:
         try:
@@ -81,7 +77,7 @@ async def public_endpoint(
             if abs(now - ts) > 60:
                 raise HTTPException(status_code=401, detail="Timestamp expired")
         except ValueError:
-            raise HTTPException(status_code=401, detail="Invalid timestamp format")
+            raise HTTPException(status_code=401, detail="Invalid timestamp")
         
         if USE_REDIS:
             if redis_client.get(x_nonce):
@@ -92,13 +88,13 @@ async def public_endpoint(
                 raise HTTPException(status_code=401, detail="Nonce already used")
             nonce_store[x_nonce] = True
         
-        body = await request.body()
+        import asyncio
+        loop = asyncio.get_event_loop()
+        body_bytes = request.body()
+        body = loop.run_until_complete(body_bytes) if not body_bytes.done() else body_bytes.result()
         body_str = body.decode()
-        method = request.method
-        path = request.url.path
-        canonical = f"{method}|{path}|{x_timestamp}|{x_nonce}|{body_str}"
+        canonical = f"{request.method}|{request.url.path}|{x_timestamp}|{x_nonce}|{body_str}"
         expected = hmac.new(HMAC_SECRET, canonical.encode(), hashlib.sha256).hexdigest()
-        
         if not hmac.compare_digest(expected, x_signature):
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
         hmac_verified = True
@@ -107,8 +103,8 @@ async def public_endpoint(
         "message": "API called successfully",
         "jwt_verified": True,
         "hmac_verified": hmac_verified,
-        "user": jwt_payload.get("preferred_username"),
-        "email": jwt_payload.get("email"),
+        "user": jwt_payload.get("sub"),
+        "email": jwt_payload.get("email", jwt_payload.get("sub")),
     }
 
 @app.get("/admin/health")
