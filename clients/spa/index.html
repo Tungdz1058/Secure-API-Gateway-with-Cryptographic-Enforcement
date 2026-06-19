@@ -273,159 +273,176 @@
             <p>HCMUTE - Faculty of Information Technology</p>
         </div>
     </div>
-    <script>
-        const AUTH0_DOMAIN = 'apigatewaysecure.us.auth0.com';
-        const CLIENT_ID = '5GkSY8Xk4oNRpJysIWx35UCyeInC0Vs3';
-        const REDIRECT_URI = window.location.origin;
-        const API_URL = 'https://secure-api-gateway-backend.onrender.com/api/public';
+   <script>
+    const AUTH0_DOMAIN = 'apigatewaysecure.us.auth0.com';
+    const CLIENT_ID = '5GkSY8Xk4oNRpJysIWx35UCyeInC0Vs3';
+    const REDIRECT_URI = window.location.origin;
+    const API_URL = 'https://secure-api-gateway-backend.onrender.com/api/public';
 
-        let idToken = null;
-        let fullIdToken = null;
+    let idToken = null;
+    let fullIdToken = null;
+    let savedVerifier = null;
 
-        sessionStorage.clear();
-        localStorage.clear();
+    const params = new URLSearchParams(window.location.search);
+    const hasCode = params.get('code') !== null;
+    const hasState = params.get('state') !== null;
 
-        function generateCodeVerifier() {
-            const array = new Uint8Array(32);
-            crypto.getRandomValues(array);
-            return btoa(String.fromCharCode(...array)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+    if (!hasCode && !hasState) {
+        sessionStorage.removeItem('pkce_verifier');
+        savedVerifier = null;
+    } else {
+        savedVerifier = sessionStorage.getItem('pkce_verifier');
+    }
+
+    function generateCodeVerifier() {
+        const array = new Uint8Array(32);
+        crypto.getRandomValues(array);
+        return btoa(String.fromCharCode(...array)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+    }
+
+    function generateCodeChallenge(verifier) {
+        const hash = sha256(verifier);
+        const bytes = new Uint8Array(hash.match(/../g).map(b => parseInt(b, 16)));
+        return btoa(String.fromCharCode(...bytes)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+    }
+
+    function decodeJwt(token) {
+        try {
+            const parts = token.split('.');
+            if (parts.length !== 3) return null;
+            const payload = parts[1];
+            const decoded = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+            return JSON.parse(decoded);
+        } catch (e) {
+            return null;
         }
+    }
 
-        function generateCodeChallenge(verifier) {
-            const hash = sha256(verifier);
-            const bytes = new Uint8Array(hash.match(/../g).map(b => parseInt(b, 16)));
-            return btoa(String.fromCharCode(...bytes)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+    function displayUserInfo(token) {
+        const data = decodeJwt(token);
+        if (data) {
+            document.getElementById('userId').innerText = data.sub || '-';
+            document.getElementById('userEmail').innerText = data.email || '-';
+            document.getElementById('userName').innerText = data.name || data.email || '-';
+            document.getElementById('emailVerified').innerText = data.email_verified !== undefined ? data.email_verified : '-';
+            document.getElementById('userInfo').style.display = 'block';
         }
+    }
 
-        function decodeJwt(token) {
-            try {
-                const parts = token.split('.');
-                if (parts.length !== 3) return null;
-                const payload = parts[1];
-                const decoded = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
-                return JSON.parse(decoded);
-            } catch (e) {
-                return null;
-            }
-        }
+    document.getElementById('loginBtn').onclick = async () => {
+        const verifier = generateCodeVerifier();
+        const challenge = await generateCodeChallenge(verifier);
+        sessionStorage.setItem('pkce_verifier', verifier);
+        savedVerifier = verifier;
+        const authUrl = 'https://' + AUTH0_DOMAIN + '/authorize' +
+            '?client_id=' + CLIENT_ID +
+            '&redirect_uri=' + encodeURIComponent(REDIRECT_URI) +
+            '&response_type=code' +
+            '&scope=openid profile email' +
+            '&code_challenge_method=S256' +
+            '&code_challenge=' + challenge +
+            '&prompt=login';
+        window.location.href = authUrl;
+    };
 
-        function displayUserInfo(token) {
-            const data = decodeJwt(token);
-            if (data) {
-                document.getElementById('userId').innerText = data.sub || '-';
-                document.getElementById('userEmail').innerText = data.email || '-';
-                document.getElementById('userName').innerText = data.name || data.email || '-';
-                document.getElementById('emailVerified').innerText = data.email_verified !== undefined ? data.email_verified : '-';
-                document.getElementById('userInfo').style.display = 'block';
-            }
-        }
-
-        document.getElementById('loginBtn').onclick = async () => {
-            const verifier = generateCodeVerifier();
-            const challenge = await generateCodeChallenge(verifier);
-            sessionStorage.setItem('pkce_verifier', verifier);
-            const authUrl = 'https://' + AUTH0_DOMAIN + '/authorize' +
-                '?client_id=' + CLIENT_ID +
-                '&redirect_uri=' + encodeURIComponent(REDIRECT_URI) +
-                '&response_type=code' +
-                '&scope=openid profile email' +
-                '&code_challenge_method=S256' +
-                '&code_challenge=' + challenge +
-                '&prompt=login';
-            window.location.href = authUrl;
-        };
-
-        async function handleCallback() {
-            const params = new URLSearchParams(window.location.search);
-            const code = params.get('code');
-            if (!code) return;
-            const verifier = sessionStorage.getItem('pkce_verifier');
-            if (!verifier) {
-                document.getElementById('tokenDisplay').textContent = 'Error: PKCE verifier not found. Please login again.';
-                return;
-            }
-            const tokenUrl = 'https://' + AUTH0_DOMAIN + '/oauth/token';
-            const body = new URLSearchParams({
-                client_id: CLIENT_ID,
-                grant_type: 'authorization_code',
-                code: code,
-                redirect_uri: REDIRECT_URI,
-                code_verifier: verifier
-            });
-            try {
-                const resp = await fetch(tokenUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: body
-                });
-                const data = await resp.json();
-                if (data.id_token) {
-                    fullIdToken = data.id_token;
-                    idToken = data.id_token;
-                    document.getElementById('tokenDisplay').textContent = JSON.stringify(data, null, 2);
-                    document.getElementById('callApiBtn').disabled = false;
-                    document.getElementById('logoutBtn').disabled = false;
-                    displayUserInfo(idToken);
-                    window.history.replaceState({}, document.title, window.location.pathname);
-                } else {
-                    document.getElementById('tokenDisplay').textContent = 'Error from Auth0:\n' + JSON.stringify(data, null, 2);
-                }
-            } catch (err) {
-                document.getElementById('tokenDisplay').textContent = 'Fetch error: ' + err.message;
-            }
-        }
-
-        document.getElementById('callApiBtn').onclick = async () => {
-            if (!idToken) {
-                alert('Please login first');
-                return;
-            }
-            document.getElementById('apiResponse').textContent = 'Calling API...';
-            try {
-                const resp = await fetch(API_URL, {
-                    method: 'GET',
-                    headers: {
-                        'Authorization': 'Bearer ' + idToken,
-                        'Content-Type': 'application/json'
-                    }
-                });
-                const contentType = resp.headers.get('content-type');
-                let data;
-                if (contentType && contentType.includes('application/json')) {
-                    data = await resp.json();
-                } else {
-                    data = await resp.text();
-                }
-                const output = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-                document.getElementById('apiResponse').textContent = output;
-            } catch (err) {
-                document.getElementById('apiResponse').textContent = 'Error: ' + err.message;
-            }
-        };
-
-        document.getElementById('logoutBtn').onclick = () => {
-            idToken = null;
-            fullIdToken = null;
-            document.getElementById('tokenDisplay').textContent = '(logged out)';
-            document.getElementById('apiResponse').textContent = '(click Call API after login)';
-            document.getElementById('callApiBtn').disabled = true;
-            document.getElementById('logoutBtn').disabled = true;
-            document.getElementById('userInfo').style.display = 'none';
-            sessionStorage.removeItem('pkce_verifier');
-            const logoutUrl = 'https://' + AUTH0_DOMAIN + '/v2/logout?returnTo=' + encodeURIComponent(REDIRECT_URI) + '&federated';
-            window.location.href = logoutUrl;
-        };
-
+    async function handleCallback() {
         const params = new URLSearchParams(window.location.search);
-        if (params.get('code')) {
-            handleCallback();
-        } else {
-            sessionStorage.removeItem('pkce_verifier');
-            document.getElementById('tokenDisplay').textContent = '(not logged in)';
-            document.getElementById('callApiBtn').disabled = true;
-            document.getElementById('logoutBtn').disabled = true;
-            document.getElementById('userInfo').style.display = 'none';
+        const code = params.get('code');
+        if (!code) return;
+
+        let verifier = sessionStorage.getItem('pkce_verifier');
+        if (!verifier) {
+            verifier = savedVerifier;
         }
-    </script>
+        if (!verifier) {
+            document.getElementById('tokenDisplay').textContent = 'Error: PKCE verifier not found. Please login again.';
+            return;
+        }
+
+        const tokenUrl = 'https://' + AUTH0_DOMAIN + '/oauth/token';
+        const body = new URLSearchParams({
+            client_id: CLIENT_ID,
+            grant_type: 'authorization_code',
+            code: code,
+            redirect_uri: REDIRECT_URI,
+            code_verifier: verifier
+        });
+
+        try {
+            const resp = await fetch(tokenUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: body
+            });
+            const data = await resp.json();
+            if (data.id_token) {
+                fullIdToken = data.id_token;
+                idToken = data.id_token;
+                document.getElementById('tokenDisplay').textContent = JSON.stringify(data, null, 2);
+                document.getElementById('callApiBtn').disabled = false;
+                document.getElementById('logoutBtn').disabled = false;
+                displayUserInfo(idToken);
+                window.history.replaceState({}, document.title, window.location.pathname);
+            } else {
+                document.getElementById('tokenDisplay').textContent = 'Error from Auth0:\n' + JSON.stringify(data, null, 2);
+            }
+        } catch (err) {
+            document.getElementById('tokenDisplay').textContent = 'Fetch error: ' + err.message;
+        }
+    }
+
+    document.getElementById('callApiBtn').onclick = async () => {
+        if (!idToken) {
+            alert('Please login first');
+            return;
+        }
+        document.getElementById('apiResponse').textContent = 'Calling API...';
+        try {
+            const resp = await fetch(API_URL, {
+                method: 'GET',
+                headers: {
+                    'Authorization': 'Bearer ' + idToken,
+                    'Content-Type': 'application/json'
+                }
+            });
+            const contentType = resp.headers.get('content-type');
+            let data;
+            if (contentType && contentType.includes('application/json')) {
+                data = await resp.json();
+            } else {
+                data = await resp.text();
+            }
+            const output = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+            document.getElementById('apiResponse').textContent = output;
+        } catch (err) {
+            document.getElementById('apiResponse').textContent = 'Error: ' + err.message;
+        }
+    };
+
+    document.getElementById('logoutBtn').onclick = () => {
+        idToken = null;
+        fullIdToken = null;
+        document.getElementById('tokenDisplay').textContent = '(logged out)';
+        document.getElementById('apiResponse').textContent = '(click Call API after login)';
+        document.getElementById('callApiBtn').disabled = true;
+        document.getElementById('logoutBtn').disabled = true;
+        document.getElementById('userInfo').style.display = 'none';
+        sessionStorage.removeItem('pkce_verifier');
+        savedVerifier = null;
+        const logoutUrl = 'https://' + AUTH0_DOMAIN + '/v2/logout?returnTo=' + encodeURIComponent(REDIRECT_URI) + '&federated';
+        window.location.href = logoutUrl;
+    };
+
+    if (hasCode) {
+        handleCallback();
+    } else {
+        sessionStorage.removeItem('pkce_verifier');
+        savedVerifier = null;
+        document.getElementById('tokenDisplay').textContent = '(not logged in)';
+        document.getElementById('callApiBtn').disabled = true;
+        document.getElementById('logoutBtn').disabled = true;
+        document.getElementById('userInfo').style.display = 'none';
+    }
+</script>
 </body>
 </html>
