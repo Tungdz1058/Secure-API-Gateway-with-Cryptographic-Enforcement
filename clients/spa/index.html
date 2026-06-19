@@ -282,6 +282,9 @@
         let idToken = null;
         let fullIdToken = null;
 
+        sessionStorage.clear();
+        localStorage.clear();
+
         function generateCodeVerifier() {
             const array = new Uint8Array(32);
             crypto.getRandomValues(array);
@@ -327,7 +330,8 @@
                 '&response_type=code' +
                 '&scope=openid profile email' +
                 '&code_challenge_method=S256' +
-                '&code_challenge=' + challenge;
+                '&code_challenge=' + challenge +
+                '&prompt=login';
             window.location.href = authUrl;
         };
 
