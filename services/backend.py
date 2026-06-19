@@ -41,6 +41,21 @@ except Exception as e:
     nonce_store = {}
     print(f"Redis not available: {e}")
 
+REVOKED_TOKENS = set()
+REVOKED_TOKENS_REDIS_KEY = "revoked_tokens"
+
+def is_token_revoked(token_hash: str) -> bool:
+    if USE_REDIS:
+        return redis_client.sismember(REVOKED_TOKENS_REDIS_KEY, token_hash)
+    return token_hash in REVOKED_TOKENS
+
+def revoke_token(token_hash: str):
+    if USE_REDIS:
+        redis_client.sadd(REVOKED_TOKENS_REDIS_KEY, token_hash)
+        redis_client.expire(REVOKED_TOKENS_REDIS_KEY, 86400)
+    else:
+        REVOKED_TOKENS.add(token_hash)
+
 class MockKMS:
     def __init__(self, redis_url: Optional[str] = None):
         self.redis_client = None
@@ -138,6 +153,10 @@ def get_hmac_secret() -> bytes:
 jwks_client = jwt.PyJWKClient(JWKS_URL)
 
 def verify_jwt(token: str) -> dict:
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    if is_token_revoked(token_hash):
+        raise HTTPException(status_code=401, detail="Token revoked")
+    
     signing_key = jwks_client.get_signing_key_from_jwt(token)
     payload = jwt.decode(
         token,
@@ -177,6 +196,8 @@ async def public_endpoint(
         raise HTTPException(status_code=401, detail="Token expired")
     except InvalidTokenError as e:
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+    except HTTPException as e:
+        raise e
 
     hmac_verified = False
     if x_timestamp and x_nonce and x_signature:
@@ -234,6 +255,26 @@ async def rotate_key(authorization: str = Header(None)):
     new_secret = os.urandom(32).hex()
     rotation_manager.rotate_with_grace(DEFAULT_KEY_ID, new_secret)
     return {"message": "Key rotated", "new_key_id": f"{DEFAULT_KEY_ID}:v2"}
+
+@app.post("/api/revoke")
+async def revoke_token_endpoint(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    token = authorization.split(" ")[1]
+    
+    try:
+        payload = verify_jwt(token)
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+    
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    revoke_token(token_hash)
+    
+    return {
+        "message": "Token revoked successfully",
+        "user": payload.get("sub"),
+        "revoked_at": datetime.now(timezone.utc).isoformat()
+    }
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5000)
