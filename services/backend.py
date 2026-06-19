@@ -9,6 +9,7 @@ import os
 import requests
 from datetime import datetime, timezone
 from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
+from services.kms import MockKMS, KeyRotationManager
 
 app = FastAPI()
 
@@ -33,13 +34,26 @@ try:
     redis_client = redis.from_url(REDIS_URL, decode_responses=True)
     redis_client.ping()
     USE_REDIS = True
-    print("[OK] Redis connected")
+    print("Redis connected")
 except Exception as e:
     USE_REDIS = False
     nonce_store = {}
-    print(f"[WARN] Redis not available: {e}")
+    print(f"Redis not available: {e}")
 
-HMAC_SECRET = os.environ.get("HMAC_SECRET", "my-secret-key-change-in-production").encode()
+kms = MockKMS()
+rotation_manager = KeyRotationManager(kms)
+
+DEFAULT_KEY_ID = "hmac-v1"
+if not kms.get_key(DEFAULT_KEY_ID):
+    default_secret = os.environ.get("HMAC_SECRET", "my-secret-key-change-in-production")
+    kms.create_key(DEFAULT_KEY_ID, default_secret)
+
+def get_hmac_secret() -> bytes:
+    secret = rotation_manager.get_valid_secret(DEFAULT_KEY_ID)
+    if not secret:
+        secret = os.environ.get("HMAC_SECRET", "my-secret-key-change-in-production")
+    return secret.encode()
+
 jwks_client = jwt.PyJWKClient(JWKS_URL)
 
 def verify_jwt(token: str) -> dict:
@@ -92,11 +106,11 @@ async def public_endpoint(
                 raise HTTPException(status_code=401, detail="Nonce already used")
             nonce_store[x_nonce] = True
         
-        # --- SỬA LỖI Ở ĐÂY ---
         body_bytes = await request.body()
         body_str = body_bytes.decode()
         canonical = f"{request.method}|{request.url.path}|{x_timestamp}|{x_nonce}|{body_str}"
-        expected = hmac.new(HMAC_SECRET, canonical.encode(), hashlib.sha256).hexdigest()
+        hmac_secret = get_hmac_secret()
+        expected = hmac.new(hmac_secret, canonical.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, x_signature):
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
         hmac_verified = True
@@ -112,6 +126,16 @@ async def public_endpoint(
 @app.get("/admin/health")
 async def health():
     return {"status": "ok"}
+
+@app.post("/api/rotate")
+async def rotate_key():
+    new_secret = os.urandom(32).hex()
+    rotation_manager.rotate_with_grace(DEFAULT_KEY_ID, new_secret)
+    return {"message": "Key rotated", "new_key_id": f"{DEFAULT_KEY_ID}:v2"}
+
+@app.get("/api/keys")
+async def list_keys():
+    return {"keys": kms.list_keys()}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5000)
