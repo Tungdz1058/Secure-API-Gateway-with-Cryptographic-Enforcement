@@ -70,7 +70,7 @@
 <script>
     const AUTH0_DOMAIN = 'apigatewaysecure.us.auth0.com';
     const CLIENT_ID = '5GkSY8Xk4oNRpJysIWx35UCyeInC0Vs3';
-    const REDIRECT_URI = 'http://localhost:3000';
+    const REDIRECT_URI = window.location.origin;
     const API_URL = 'http://localhost:5000/api/public';
 
     let idToken = null;  // Dùng id_token thay vì access_token
@@ -172,7 +172,7 @@
         document.getElementById('userInfo').style.display = 'none';
         document.getElementById('apiResponse').innerHTML = '(click "Call Protected API" after login)';
         const logoutUrl = `https://${AUTH0_DOMAIN}/v2/logout?returnTo=${encodeURIComponent(REDIRECT_URI)}`;
-        window.location.href = logoutUrl;
+        window.location.href = logoutFl;
     };
 
     handleCallback();
