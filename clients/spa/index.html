@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Secure API Gateway - Cryptographic Enforcement</title>
+    <title>Secure API Gateway</title>
     <style>
         * {
             margin: 0;
@@ -25,7 +25,7 @@
             margin: 0 auto;
             background: white;
             border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
             overflow: hidden;
         }
         .header {
@@ -102,12 +102,27 @@
             opacity: 0.5;
             cursor: not-allowed;
         }
-        .btn-primary { background: #003366; color: white; }
-        .btn-primary:hover:not(:disabled) { background: #002244; }
-        .btn-success { background: #28a745; color: white; }
-        .btn-success:hover:not(:disabled) { background: #1e7e34; }
-        .btn-danger { background: #dc3545; color: white; }
-        .btn-danger:hover:not(:disabled) { background: #bd2130; }
+        .btn-primary {
+            background: #003366;
+            color: white;
+        }
+        .btn-primary:hover:not(:disabled) {
+            background: #002244;
+        }
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+        .btn-success:hover:not(:disabled) {
+            background: #1e7e34;
+        }
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+        .btn-danger:hover:not(:disabled) {
+            background: #bd2130;
+        }
         .info-card {
             background: #e8f0fe;
             border-left: 4px solid #003366;
@@ -127,7 +142,7 @@
         .info-label {
             font-weight: 600;
             display: inline-block;
-            width: 100px;
+            width: 120px;
             color: #333;
         }
         .info-value {
@@ -158,9 +173,6 @@
             max-height: 350px;
             overflow-y: auto;
         }
-        .code-block .string { color: #ce9178; }
-        .code-block .key { color: #9cdcfe; }
-        .code-block .boolean { color: #569cd6; }
         .api-response {
             background: #1e1e1e;
             color: #d4d4d4;
@@ -185,166 +197,150 @@
             color: #003366;
         }
         @media (max-width: 768px) {
-            .header { flex-direction: column; align-items: flex-start; }
-            .header-right { margin-left: 0; text-align: left; width: 100%; }
-            .content { padding: 20px; }
-            .button-group { flex-direction: column; }
-            button { width: 100%; }
-            .team-info { flex-direction: column; gap: 8px; }
+            .header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .header-right {
+                margin-left: 0;
+                text-align: left;
+                width: 100%;
+            }
+            .content {
+                padding: 20px;
+            }
+            .button-group {
+                flex-direction: column;
+            }
+            button {
+                width: 100%;
+            }
+            .team-info {
+                flex-direction: column;
+                gap: 8px;
+            }
         }
     </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.9.0/sha256.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.9.0/sha256.min.js">
+    </script>
 </head>
 <body>
-<div class="container">
-    <!-- HEADER -->
-    <div class="header">
-        <div class="header-left">
-            <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/03/Logo_HCMUTE.svg/120px-Logo_HCMUTE.svg.png" alt="HCMUTE Logo" onerror="this.style.display='none'">
-            <div class="header-text">
-                <h1>Secure API Gateway</h1>
-                <p>Cryptographic Enforcement | OAuth2 + PKCE | JWT + HMAC</p>
+    <div class="container">
+        <div class="header">
+            <div class="header-left">
+                <img src="https://hcmute.edu.vn/Images/logo.hcmute.png" alt="HCMUTE Logo" style="height:60px; width:auto; background:white; border-radius:8px; padding:5px;" onerror="this.style.display='none'">
+                <div class="header-text">
+                    <h1>Secure API Gateway</h1>
+                    <p>Cryptographic Enforcement | OAuth2 + PKCE | JWT + HMAC</p>
+                </div>
+            </div>
+            <div class="header-right">
+                <strong>Nhom thuc hien</strong><br>
+                Le Dinh Tung - 24162140<br>
+                Tran Ngo Anh Tu - 24152141<br>
+                Cao Nhut Thanh - 24162118
             </div>
         </div>
-        <div class="header-right">
-            <strong>Nhóm thực hiện</strong><br>
-            Lê Đình Tùng - 24162140<br>
-            Trần Ngô Anh Tú - 24152141<br>
-            Cao Nhứt Thạnh - 24162118
+        <div class="content">
+            <div class="team-info">
+                <span class="member"><strong>Le Dinh Tung</strong> - 24162140</span>
+                <span class="member"><strong>Tran Ngo Anh Tu</strong> - 24152141</span>
+                <span class="member"><strong>Cao Nhut Thanh</strong> - 24162118</span>
+            </div>
+            <div class="button-group">
+                <button id="loginBtn" class="btn-primary">Login with Auth0</button>
+                <button id="callApiBtn" class="btn-success" disabled>Call API</button>
+                <button id="logoutBtn" class="btn-danger" disabled>Logout</button>
+            </div>
+            <div id="userInfo" class="info-card" style="display: none;">
+                <h3>User Information</h3>
+                <div class="info-row"><span class="info-label">User ID:</span><span class="info-value" id="userId"></span></div>
+                <div class="info-row"><span class="info-label">Email:</span><span class="info-value" id="userEmail"></span></div>
+                <div class="info-row"><span class="info-label">Name:</span><span class="info-value" id="userName"></span></div>
+                <div class="info-row"><span class="info-label">Verified:</span><span class="info-value" id="emailVerified"></span></div>
+            </div>
+            <div class="section">
+                <div class="section-title">ID Token</div>
+                <div class="code-block" id="tokenDisplay">(not logged in)</div>
+            </div>
+            <div class="section">
+                <div class="section-title">API Response</div>
+                <div class="api-response" id="apiResponse">(click Call API after login)</div>
+            </div>
+        </div>
+        <div class="footer">
+            <p><strong>Cryptographic Enforcement</strong> | HMAC | Nonce | Timestamp | Replay Protection</p>
+            <p>HCMUTE - Faculty of Information Technology</p>
         </div>
     </div>
+    <script>
+        const AUTH0_DOMAIN = 'apigatewaysecure.us.auth0.com';
+        const CLIENT_ID = '5GkSY8Xk4oNRpJysIWx35UCyeInC0Vs3';
+        const REDIRECT_URI = window.location.origin;
+        const API_URL = 'https://secure-api-gateway-backend.onrender.com/api/public';
 
-    <!-- CONTENT -->
-    <div class="content">
-        <!-- Team Info -->
-        <div class="team-info">
-            <span class="member"><strong>👨‍🎓 Lê Đình Tùng</strong> - 24162140</span>
-            <span class="member"><strong>👨‍🎓 Trần Ngô Anh Tú</strong> - 24152141</span>
-            <span class="member"><strong>👨‍🎓 Cao Nhứt Thạnh</strong> - 24162118</span>
-        </div>
+        let idToken = null;
+        let fullIdToken = null;
 
-        <!-- Buttons -->
-        <div class="button-group">
-            <button id="loginBtn" class="btn-primary">🔑 Login with Auth0 (PKCE)</button>
-            <button id="callApiBtn" class="btn-success" disabled>📡 Call Protected API</button>
-            <button id="logoutBtn" class="btn-danger" disabled>🚪 Logout</button>
-        </div>
-
-        <!-- User Info -->
-        <div id="userInfo" class="info-card" style="display: none;">
-            <h3>👤 User Information (from ID Token)</h3>
-            <div class="info-row"><span class="info-label">User ID (sub):</span><span class="info-value" id="userId"></span></div>
-            <div class="info-row"><span class="info-label">Email:</span><span class="info-value" id="userEmail"></span></div>
-            <div class="info-row"><span class="info-label">Name:</span><span class="info-value" id="userName"></span></div>
-            <div class="info-row"><span class="info-label">Email Verified:</span><span class="info-value" id="emailVerified"></span></div>
-        </div>
-
-        <!-- Full ID Token -->
-        <div class="section">
-            <div class="section-title">🔐 ID Token (full - used for API calls)</div>
-            <div class="code-block" id="tokenDisplay">(not logged in)</div>
-        </div>
-
-        <!-- API Response -->
-        <div class="section">
-            <div class="section-title">📡 API Response</div>
-            <div class="api-response" id="apiResponse">(click "Call Protected API" after login)</div>
-        </div>
-    </div>
-
-    <!-- FOOTER -->
-    <div class="footer">
-        <p><strong>Cryptographic Enforcement</strong> | HMAC Request Signing | Nonce + Timestamp | Replay Attack Protection</p>
-        <p>Đại học Sư phạm Kỹ thuật Thành phố Hồ Chí Minh (HCMUTE) - Khoa Công nghệ Thông tin</p>
-    </div>
-</div>
-
-<script>
-
-    const AUTH0_DOMAIN = 'apigatewaysecure.us.auth0.com';
-    const CLIENT_ID = '5GkSY8Xk4oNRpJysIWx35UCyeInC0Vs3';
-    const REDIRECT_URI = window.location.origin;
-    const API_URL = 'https://secure-api-gateway-backend.onrender.com/api/public';
-
-
-    let idToken = null;
-    let fullIdToken = null;  
-
-
-    function generateCodeVerifier() {
-        const array = new Uint8Array(32);
-        crypto.getRandomValues(array);
-        return btoa(String.fromCharCode(...array))
-            .replace(/=/g, '')
-            .replace(/\+/g, '-')
-            .replace(/\//g, '_');
-    }
-
-    function generateCodeChallenge(verifier) {
-        const hash = sha256(verifier);
-        const bytes = new Uint8Array(hash.match(/../g).map(b => parseInt(b, 16)));
-        return btoa(String.fromCharCode(...bytes))
-            .replace(/=/g, '')
-            .replace(/\+/g, '-')
-            .replace(/\//g, '_');
-    }
-
-
-    function decodeJwt(token) {
-        try {
-            const parts = token.split('.');
-            if (parts.length !== 3) return null;
-            const payload = parts[1];
-            const decoded = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
-            return JSON.parse(decoded);
-        } catch(e) {
-            console.error('JWT decode error:', e);
-            return null;
+        function generateCodeVerifier() {
+            const array = new Uint8Array(32);
+            crypto.getRandomValues(array);
+            return btoa(String.fromCharCode(...array)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
         }
-    }
 
-
-    function displayUserInfo(idToken) {
-        const data = decodeJwt(idToken);
-        if (data) {
-            document.getElementById('userId').innerText = data.sub || '-';
-            document.getElementById('userEmail').innerText = data.email || '-';
-            document.getElementById('userName').innerText = data.name || data.email || '-';
-            document.getElementById('emailVerified').innerText = data.email_verified !== undefined ? data.email_verified : '-';
-            document.getElementById('userInfo').style.display = 'block';
+        function generateCodeChallenge(verifier) {
+            const hash = sha256(verifier);
+            const bytes = new Uint8Array(hash.match(/../g).map(b => parseInt(b, 16)));
+            return btoa(String.fromCharCode(...bytes)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
         }
-    }
 
+        function decodeJwt(token) {
+            try {
+                const parts = token.split('.');
+                if (parts.length !== 3) return null;
+                const payload = parts[1];
+                const decoded = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+                return JSON.parse(decoded);
+            } catch (e) {
+                return null;
+            }
+        }
 
-    document.getElementById('loginBtn').onclick = async () => {
-        const verifier = generateCodeVerifier();
-        const challenge = await generateCodeChallenge(verifier);
-        sessionStorage.setItem('pkce_verifier', verifier);
+        function displayUserInfo(token) {
+            const data = decodeJwt(token);
+            if (data) {
+                document.getElementById('userId').innerText = data.sub || '-';
+                document.getElementById('userEmail').innerText = data.email || '-';
+                document.getElementById('userName').innerText = data.name || data.email || '-';
+                document.getElementById('emailVerified').innerText = data.email_verified !== undefined ? data.email_verified : '-';
+                document.getElementById('userInfo').style.display = 'block';
+            }
+        }
 
-        const authUrl = `https://${AUTH0_DOMAIN}/authorize` +
-            `?client_id=${CLIENT_ID}` +
-            `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-            `&response_type=code` +
-            `&scope=openid profile email` +
-            `&code_challenge_method=S256` +
-            `&code_challenge=${challenge}`;
+        document.getElementById('loginBtn').onclick = async () => {
+            const verifier = generateCodeVerifier();
+            const challenge = await generateCodeChallenge(verifier);
+            sessionStorage.setItem('pkce_verifier', verifier);
+            const authUrl = 'https://' + AUTH0_DOMAIN + '/authorize' +
+                '?client_id=' + CLIENT_ID +
+                '&redirect_uri=' + encodeURIComponent(REDIRECT_URI) +
+                '&response_type=code' +
+                '&scope=openid profile email' +
+                '&code_challenge_method=S256' +
+                '&code_challenge=' + challenge;
+            window.location.href = authUrl;
+        };
 
-        window.location.href = authUrl;
-    };
-
-
-    async function handleCallback() {
-        const params = new URLSearchParams(window.location.search);
-        const code = params.get('code');
-
-        if (code) {
+        async function handleCallback() {
+            const params = new URLSearchParams(window.location.search);
+            const code = params.get('code');
+            if (!code) return;
             const verifier = sessionStorage.getItem('pkce_verifier');
             if (!verifier) {
                 document.getElementById('tokenDisplay').textContent = 'Error: PKCE verifier not found. Please login again.';
                 return;
             }
-
-            const tokenUrl = `https://${AUTH0_DOMAIN}/oauth/token`;
+            const tokenUrl = 'https://' + AUTH0_DOMAIN + '/oauth/token';
             const body = new URLSearchParams({
                 client_id: CLIENT_ID,
                 grant_type: 'authorization_code',
@@ -352,7 +348,6 @@
                 redirect_uri: REDIRECT_URI,
                 code_verifier: verifier
             });
-
             try {
                 const resp = await fetch(tokenUrl, {
                     method: 'POST',
@@ -360,20 +355,13 @@
                     body: body
                 });
                 const data = await resp.json();
-
                 if (data.id_token) {
                     fullIdToken = data.id_token;
                     idToken = data.id_token;
-
-                    // HIỂN THỊ ĐẦY ĐỦ ID_TOKEN (KHÔNG TÓM TẮT)
-                    const formatted = JSON.stringify(data, null, 2);
-                    document.getElementById('tokenDisplay').textContent = formatted;
-
+                    document.getElementById('tokenDisplay').textContent = JSON.stringify(data, null, 2);
                     document.getElementById('callApiBtn').disabled = false;
                     document.getElementById('logoutBtn').disabled = false;
                     displayUserInfo(idToken);
-
-                    // Xóa code khỏi URL
                     window.history.replaceState({}, document.title, window.location.pathname);
                 } else {
                     document.getElementById('tokenDisplay').textContent = 'Error from Auth0:\n' + JSON.stringify(data, null, 2);
@@ -382,60 +370,58 @@
                 document.getElementById('tokenDisplay').textContent = 'Fetch error: ' + err.message;
             }
         }
-    }
 
-
-    document.getElementById('callApiBtn').onclick = async () => {
-        if (!idToken) {
-            alert('Please login first');
-            return;
-        }
-
-        document.getElementById('apiResponse').textContent = '⏳ Calling API...';
-
-        try {
-            const resp = await fetch(API_URL, {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${idToken}`,
-                    'Content-Type': 'application/json'
-                }
-            });
-
-            const contentType = resp.headers.get('content-type');
-            let data;
-            if (contentType && contentType.includes('application/json')) {
-                data = await resp.json();
-            } else {
-                data = await resp.text();
+        document.getElementById('callApiBtn').onclick = async () => {
+            if (!idToken) {
+                alert('Please login first');
+                return;
             }
+            document.getElementById('apiResponse').textContent = 'Calling API...';
+            try {
+                const resp = await fetch(API_URL, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': 'Bearer ' + idToken,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                const contentType = resp.headers.get('content-type');
+                let data;
+                if (contentType && contentType.includes('application/json')) {
+                    data = await resp.json();
+                } else {
+                    data = await resp.text();
+                }
+                const output = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+                document.getElementById('apiResponse').textContent = output;
+            } catch (err) {
+                document.getElementById('apiResponse').textContent = 'Error: ' + err.message;
+            }
+        };
 
-            const output = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-            document.getElementById('apiResponse').textContent = output;
+        document.getElementById('logoutBtn').onclick = () => {
+            idToken = null;
+            fullIdToken = null;
+            document.getElementById('tokenDisplay').textContent = '(logged out)';
+            document.getElementById('apiResponse').textContent = '(click Call API after login)';
+            document.getElementById('callApiBtn').disabled = true;
+            document.getElementById('logoutBtn').disabled = true;
+            document.getElementById('userInfo').style.display = 'none';
+            sessionStorage.removeItem('pkce_verifier');
+            const logoutUrl = 'https://' + AUTH0_DOMAIN + '/v2/logout?returnTo=' + encodeURIComponent(REDIRECT_URI) + '&federated';
+            window.location.href = logoutUrl;
+        };
 
-        } catch (err) {
-            document.getElementById('apiResponse').textContent = '❌ Error: ' + err.message;
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('code')) {
+            handleCallback();
+        } else {
+            sessionStorage.removeItem('pkce_verifier');
+            document.getElementById('tokenDisplay').textContent = '(not logged in)';
+            document.getElementById('callApiBtn').disabled = true;
+            document.getElementById('logoutBtn').disabled = true;
+            document.getElementById('userInfo').style.display = 'none';
         }
-    };
-
-
-    document.getElementById('logoutBtn').onclick = () => {
-        idToken = null;
-        fullIdToken = null;
-
-        document.getElementById('tokenDisplay').textContent = '(logged out)';
-        document.getElementById('apiResponse').textContent = '(click "Call Protected API" after login)';
-        document.getElementById('callApiBtn').disabled = true;
-        document.getElementById('logoutBtn').disabled = true;
-        document.getElementById('userInfo').style.display = 'none';
-
-        // Redirect to Auth0 logout
-        const logoutUrl = `https://${AUTH0_DOMAIN}/v2/logout?returnTo=${encodeURIComponent(REDIRECT_URI)}`;
-        window.location.href = logoutUrl;
-    };
-
-
-    handleCallback();
-</script>
+    </script>
 </body>
 </html>
