@@ -301,6 +301,7 @@
         const CLIENT_ID = '5GkSY8Xk4oNRpJysIWx35UCyeInC0Vs3';
         const REDIRECT_URI = window.location.origin;
         const API_URL = 'https://secure-api-gateway-backend.onrender.com/api/public';
+        const API_PATH = '/api/public';
         const HMAC_SECRET = 'my-secret-key-change-in-production';
 
         let idToken = null;
@@ -435,8 +436,8 @@
             }
         }
 
-        async function generateHmacSignature(method, url, timestamp, nonce, body, secret) {
-            const canonical = method + '|' + url + '|' + timestamp + '|' + nonce + '|' + body;
+        async function generateHmacSignature(method, path, timestamp, nonce, body, secret) {
+            const canonical = method + '|' + path + '|' + timestamp + '|' + nonce + '|' + body;
             const encoder = new TextEncoder();
             const data = encoder.encode(canonical);
             const key = await crypto.subtle.importKey(
@@ -462,14 +463,14 @@
             const timestamp = Math.floor(Date.now() / 1000).toString();
             const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
             const method = 'GET';
-            const url = API_URL;
+            const path = API_PATH;
             const body = '';
 
             try {
-                const signature = await generateHmacSignature(method, url, timestamp, nonce, body, HMAC_SECRET);
+                const signature = await generateHmacSignature(method, path, timestamp, nonce, body, HMAC_SECRET);
                 updateHmacStatus('pending', 'HMAC generated, sending request...');
 
-                const resp = await fetch(url, {
+                const resp = await fetch(API_URL, {
                     method: method,
                     headers: {
                         'Authorization': 'Bearer ' + idToken,
