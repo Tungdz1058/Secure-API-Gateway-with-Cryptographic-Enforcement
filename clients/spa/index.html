@@ -142,7 +142,7 @@
         .info-label {
             font-weight: 600;
             display: inline-block;
-            width: 120px;
+            width: 130px;
             color: #333;
         }
         .info-value {
@@ -185,6 +185,25 @@
             word-break: break-all;
             min-height: 60px;
         }
+        .status-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .status-success {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status-pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .status-fail {
+            background: #f8d7da;
+            color: #721c24;
+        }
         .footer {
             background: #f8f9fa;
             padding: 15px 30px;
@@ -218,6 +237,9 @@
             .team-info {
                 flex-direction: column;
                 gap: 8px;
+            }
+            .info-label {
+                width: 100px;
             }
         }
     </style>
@@ -258,6 +280,7 @@
                 <div class="info-row"><span class="info-label">Email:</span><span class="info-value" id="userEmail"></span></div>
                 <div class="info-row"><span class="info-label">Name:</span><span class="info-value" id="userName"></span></div>
                 <div class="info-row"><span class="info-label">Verified:</span><span class="info-value" id="emailVerified"></span></div>
+                <div class="info-row"><span class="info-label">HMAC Status:</span><span class="info-value" id="hmacStatus"><span class="status-badge status-pending">Not sent</span></span></div>
             </div>
             <div class="section">
                 <div class="section-title">ID Token</div>
@@ -273,176 +296,237 @@
             <p>HCMUTE - Faculty of Information Technology</p>
         </div>
     </div>
-   <script>
-    const AUTH0_DOMAIN = 'apigatewaysecure.us.auth0.com';
-    const CLIENT_ID = '5GkSY8Xk4oNRpJysIWx35UCyeInC0Vs3';
-    const REDIRECT_URI = window.location.origin;
-    const API_URL = 'https://secure-api-gateway-backend.onrender.com/api/public';
+    <script>
+        const AUTH0_DOMAIN = 'apigatewaysecure.us.auth0.com';
+        const CLIENT_ID = '5GkSY8Xk4oNRpJysIWx35UCyeInC0Vs3';
+        const REDIRECT_URI = window.location.origin;
+        const API_URL = 'https://secure-api-gateway-backend.onrender.com/api/public';
+        const HMAC_SECRET = 'my-secret-key-change-in-production';
 
-    let idToken = null;
-    let fullIdToken = null;
-    let savedVerifier = null;
+        let idToken = null;
+        let fullIdToken = null;
+        let savedVerifier = null;
 
-    const params = new URLSearchParams(window.location.search);
-    const hasCode = params.get('code') !== null;
-    const hasState = params.get('state') !== null;
-
-    if (!hasCode && !hasState) {
-        sessionStorage.removeItem('pkce_verifier');
-        savedVerifier = null;
-    } else {
-        savedVerifier = sessionStorage.getItem('pkce_verifier');
-    }
-
-    function generateCodeVerifier() {
-        const array = new Uint8Array(32);
-        crypto.getRandomValues(array);
-        return btoa(String.fromCharCode(...array)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-    }
-
-    function generateCodeChallenge(verifier) {
-        const hash = sha256(verifier);
-        const bytes = new Uint8Array(hash.match(/../g).map(b => parseInt(b, 16)));
-        return btoa(String.fromCharCode(...bytes)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-    }
-
-    function decodeJwt(token) {
-        try {
-            const parts = token.split('.');
-            if (parts.length !== 3) return null;
-            const payload = parts[1];
-            const decoded = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
-            return JSON.parse(decoded);
-        } catch (e) {
-            return null;
-        }
-    }
-
-    function displayUserInfo(token) {
-        const data = decodeJwt(token);
-        if (data) {
-            document.getElementById('userId').innerText = data.sub || '-';
-            document.getElementById('userEmail').innerText = data.email || '-';
-            document.getElementById('userName').innerText = data.name || data.email || '-';
-            document.getElementById('emailVerified').innerText = data.email_verified !== undefined ? data.email_verified : '-';
-            document.getElementById('userInfo').style.display = 'block';
-        }
-    }
-
-    document.getElementById('loginBtn').onclick = async () => {
-        const verifier = generateCodeVerifier();
-        const challenge = await generateCodeChallenge(verifier);
-        sessionStorage.setItem('pkce_verifier', verifier);
-        savedVerifier = verifier;
-        const authUrl = 'https://' + AUTH0_DOMAIN + '/authorize' +
-            '?client_id=' + CLIENT_ID +
-            '&redirect_uri=' + encodeURIComponent(REDIRECT_URI) +
-            '&response_type=code' +
-            '&scope=openid profile email' +
-            '&code_challenge_method=S256' +
-            '&code_challenge=' + challenge +
-            '&prompt=login';
-        window.location.href = authUrl;
-    };
-
-    async function handleCallback() {
         const params = new URLSearchParams(window.location.search);
-        const code = params.get('code');
-        if (!code) return;
+        const hasCode = params.get('code') !== null;
+        const hasState = params.get('state') !== null;
 
-        let verifier = sessionStorage.getItem('pkce_verifier');
-        if (!verifier) {
-            verifier = savedVerifier;
-        }
-        if (!verifier) {
-            document.getElementById('tokenDisplay').textContent = 'Error: PKCE verifier not found. Please login again.';
-            return;
+        if (!hasCode && !hasState) {
+            sessionStorage.removeItem('pkce_verifier');
+            savedVerifier = null;
+        } else {
+            savedVerifier = sessionStorage.getItem('pkce_verifier');
         }
 
-        const tokenUrl = 'https://' + AUTH0_DOMAIN + '/oauth/token';
-        const body = new URLSearchParams({
-            client_id: CLIENT_ID,
-            grant_type: 'authorization_code',
-            code: code,
-            redirect_uri: REDIRECT_URI,
-            code_verifier: verifier
-        });
+        function generateCodeVerifier() {
+            const array = new Uint8Array(32);
+            crypto.getRandomValues(array);
+            return btoa(String.fromCharCode(...array)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+        }
 
-        try {
-            const resp = await fetch(tokenUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: body
-            });
-            const data = await resp.json();
-            if (data.id_token) {
-                fullIdToken = data.id_token;
-                idToken = data.id_token;
-                document.getElementById('tokenDisplay').textContent = JSON.stringify(data, null, 2);
-                document.getElementById('callApiBtn').disabled = false;
-                document.getElementById('logoutBtn').disabled = false;
-                displayUserInfo(idToken);
-                window.history.replaceState({}, document.title, window.location.pathname);
-            } else {
-                document.getElementById('tokenDisplay').textContent = 'Error from Auth0:\n' + JSON.stringify(data, null, 2);
+        function generateCodeChallenge(verifier) {
+            const hash = sha256(verifier);
+            const bytes = new Uint8Array(hash.match(/../g).map(b => parseInt(b, 16)));
+            return btoa(String.fromCharCode(...bytes)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+        }
+
+        function decodeJwt(token) {
+            try {
+                const parts = token.split('.');
+                if (parts.length !== 3) return null;
+                const payload = parts[1];
+                const decoded = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+                return JSON.parse(decoded);
+            } catch (e) {
+                return null;
             }
-        } catch (err) {
-            document.getElementById('tokenDisplay').textContent = 'Fetch error: ' + err.message;
         }
-    }
 
-    document.getElementById('callApiBtn').onclick = async () => {
-        if (!idToken) {
-            alert('Please login first');
-            return;
+        function displayUserInfo(token) {
+            const data = decodeJwt(token);
+            if (data) {
+                document.getElementById('userId').innerText = data.sub || '-';
+                document.getElementById('userEmail').innerText = data.email || '-';
+                document.getElementById('userName').innerText = data.name || data.email || '-';
+                document.getElementById('emailVerified').innerText = data.email_verified !== undefined ? data.email_verified : '-';
+                document.getElementById('userInfo').style.display = 'block';
+                updateHmacStatus('pending', 'Ready to send HMAC');
+            }
         }
-        document.getElementById('apiResponse').textContent = 'Calling API...';
-        try {
-            const resp = await fetch(API_URL, {
-                method: 'GET',
-                headers: {
-                    'Authorization': 'Bearer ' + idToken,
-                    'Content-Type': 'application/json'
+
+        function updateHmacStatus(status, message) {
+            const el = document.getElementById('hmacStatus');
+            const badge = el.querySelector('.status-badge') || document.createElement('span');
+            badge.className = 'status-badge';
+            if (status === 'success') {
+                badge.className += ' status-success';
+                badge.textContent = '✓ ' + message;
+            } else if (status === 'pending') {
+                badge.className += ' status-pending';
+                badge.textContent = '⏳ ' + message;
+            } else {
+                badge.className += ' status-fail';
+                badge.textContent = '✗ ' + message;
+            }
+            if (!el.querySelector('.status-badge')) {
+                el.appendChild(badge);
+            }
+        }
+
+        document.getElementById('loginBtn').onclick = async () => {
+            const verifier = generateCodeVerifier();
+            const challenge = await generateCodeChallenge(verifier);
+            sessionStorage.setItem('pkce_verifier', verifier);
+            savedVerifier = verifier;
+            const authUrl = 'https://' + AUTH0_DOMAIN + '/authorize' +
+                '?client_id=' + CLIENT_ID +
+                '&redirect_uri=' + encodeURIComponent(REDIRECT_URI) +
+                '&response_type=code' +
+                '&scope=openid profile email' +
+                '&code_challenge_method=S256' +
+                '&code_challenge=' + challenge +
+                '&prompt=login';
+            window.location.href = authUrl;
+        };
+
+        async function handleCallback() {
+            const params = new URLSearchParams(window.location.search);
+            const code = params.get('code');
+            if (!code) return;
+
+            let verifier = sessionStorage.getItem('pkce_verifier');
+            if (!verifier) {
+                verifier = savedVerifier;
+            }
+            if (!verifier) {
+                document.getElementById('tokenDisplay').textContent = 'Error: PKCE verifier not found. Please login again.';
+                return;
+            }
+
+            const tokenUrl = 'https://' + AUTH0_DOMAIN + '/oauth/token';
+            const body = new URLSearchParams({
+                client_id: CLIENT_ID,
+                grant_type: 'authorization_code',
+                code: code,
+                redirect_uri: REDIRECT_URI,
+                code_verifier: verifier
+            });
+
+            try {
+                const resp = await fetch(tokenUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: body
+                });
+                const data = await resp.json();
+                if (data.id_token) {
+                    fullIdToken = data.id_token;
+                    idToken = data.id_token;
+                    document.getElementById('tokenDisplay').textContent = JSON.stringify(data, null, 2);
+                    document.getElementById('callApiBtn').disabled = false;
+                    document.getElementById('logoutBtn').disabled = false;
+                    displayUserInfo(idToken);
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                } else {
+                    document.getElementById('tokenDisplay').textContent = 'Error from Auth0:\n' + JSON.stringify(data, null, 2);
                 }
-            });
-            const contentType = resp.headers.get('content-type');
-            let data;
-            if (contentType && contentType.includes('application/json')) {
-                data = await resp.json();
-            } else {
-                data = await resp.text();
+            } catch (err) {
+                document.getElementById('tokenDisplay').textContent = 'Fetch error: ' + err.message;
             }
-            const output = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-            document.getElementById('apiResponse').textContent = output;
-        } catch (err) {
-            document.getElementById('apiResponse').textContent = 'Error: ' + err.message;
         }
-    };
 
-    document.getElementById('logoutBtn').onclick = () => {
-        idToken = null;
-        fullIdToken = null;
-        document.getElementById('tokenDisplay').textContent = '(logged out)';
-        document.getElementById('apiResponse').textContent = '(click Call API after login)';
-        document.getElementById('callApiBtn').disabled = true;
-        document.getElementById('logoutBtn').disabled = true;
-        document.getElementById('userInfo').style.display = 'none';
-        sessionStorage.removeItem('pkce_verifier');
-        savedVerifier = null;
-        const logoutUrl = 'https://' + AUTH0_DOMAIN + '/v2/logout?returnTo=' + encodeURIComponent(REDIRECT_URI) + '&federated';
-        window.location.href = logoutUrl;
-    };
+        async function generateHmacSignature(method, url, timestamp, nonce, body, secret) {
+            const canonical = method + '|' + url + '|' + timestamp + '|' + nonce + '|' + body;
+            const encoder = new TextEncoder();
+            const data = encoder.encode(canonical);
+            const key = await crypto.subtle.importKey(
+                'raw',
+                encoder.encode(secret),
+                { name: 'HMAC', hash: 'SHA-256' },
+                false,
+                ['sign']
+            );
+            const signatureBuffer = await crypto.subtle.sign('HMAC', key, data);
+            const signatureArray = Array.from(new Uint8Array(signatureBuffer));
+            return signatureArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
 
-    if (hasCode) {
-        handleCallback();
-    } else {
-        sessionStorage.removeItem('pkce_verifier');
-        savedVerifier = null;
-        document.getElementById('tokenDisplay').textContent = '(not logged in)';
-        document.getElementById('callApiBtn').disabled = true;
-        document.getElementById('logoutBtn').disabled = true;
-        document.getElementById('userInfo').style.display = 'none';
-    }
-</script>
+        document.getElementById('callApiBtn').onclick = async () => {
+            if (!idToken) {
+                alert('Please login first');
+                return;
+            }
+            document.getElementById('apiResponse').textContent = 'Calling API with HMAC...';
+            updateHmacStatus('pending', 'Generating HMAC...');
+
+            const timestamp = Math.floor(Date.now() / 1000).toString();
+            const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+            const method = 'GET';
+            const url = API_URL;
+            const body = '';
+
+            try {
+                const signature = await generateHmacSignature(method, url, timestamp, nonce, body, HMAC_SECRET);
+                updateHmacStatus('pending', 'HMAC generated, sending request...');
+
+                const resp = await fetch(url, {
+                    method: method,
+                    headers: {
+                        'Authorization': 'Bearer ' + idToken,
+                        'Content-Type': 'application/json',
+                        'X-Timestamp': timestamp,
+                        'X-Nonce': nonce,
+                        'X-Signature': signature
+                    }
+                });
+                const contentType = resp.headers.get('content-type');
+                let data;
+                if (contentType && contentType.includes('application/json')) {
+                    data = await resp.json();
+                } else {
+                    data = await resp.text();
+                }
+                const output = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+                document.getElementById('apiResponse').textContent = output;
+
+                if (data.hmac_verified === true) {
+                    updateHmacStatus('success', 'HMAC verified ✓');
+                } else if (data.hmac_verified === false) {
+                    updateHmacStatus('fail', 'HMAC not verified (server)');
+                } else {
+                    updateHmacStatus('pending', 'Response received');
+                }
+            } catch (err) {
+                document.getElementById('apiResponse').textContent = 'Error: ' + err.message;
+                updateHmacStatus('fail', 'Error: ' + err.message);
+            }
+        };
+
+        document.getElementById('logoutBtn').onclick = () => {
+            idToken = null;
+            fullIdToken = null;
+            document.getElementById('tokenDisplay').textContent = '(logged out)';
+            document.getElementById('apiResponse').textContent = '(click Call API after login)';
+            document.getElementById('callApiBtn').disabled = true;
+            document.getElementById('logoutBtn').disabled = true;
+            document.getElementById('userInfo').style.display = 'none';
+            sessionStorage.removeItem('pkce_verifier');
+            savedVerifier = null;
+            const logoutUrl = 'https://' + AUTH0_DOMAIN + '/v2/logout?returnTo=' + encodeURIComponent(REDIRECT_URI) + '&federated';
+            window.location.href = logoutUrl;
+        };
+
+        if (hasCode) {
+            handleCallback();
+        } else {
+            sessionStorage.removeItem('pkce_verifier');
+            savedVerifier = null;
+            document.getElementById('tokenDisplay').textContent = '(not logged in)';
+            document.getElementById('callApiBtn').disabled = true;
+            document.getElementById('logoutBtn').disabled = true;
+            document.getElementById('userInfo').style.display = 'none';
+            updateHmacStatus('pending', 'Not sent');
+        }
+    </script>
 </body>
 </html>
