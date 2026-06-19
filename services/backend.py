@@ -152,7 +152,7 @@ def verify_jwt(token: str) -> dict:
 def verify_admin(token: str) -> bool:
     try:
         payload = verify_jwt(token)
-        roles = payload.get("roles", [])
+        roles = payload.get("https://api-gateway-demo.com/roles", [])
         if "admin" in roles:
             return True
         return False
