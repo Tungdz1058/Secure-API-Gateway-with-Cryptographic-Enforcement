@@ -149,6 +149,16 @@ def verify_jwt(token: str) -> dict:
     )
     return payload
 
+def verify_admin(token: str) -> bool:
+    try:
+        payload = verify_jwt(token)
+        roles = payload.get("roles", [])
+        if "admin" in roles:
+            return True
+        return False
+    except:
+        return False
+
 @app.api_route("/api/public", methods=["GET", "POST", "PUT", "DELETE"])
 async def public_endpoint(
     request: Request,
@@ -208,15 +218,22 @@ async def public_endpoint(
 async def health():
     return {"status": "ok"}
 
-@app.post("/api/rotate")
-async def rotate_key():
-    new_secret = os.urandom(32).hex()
-    rotation_manager.rotate_with_grace(DEFAULT_KEY_ID, new_secret)
-    return {"message": "Key rotated", "new_key_id": f"{DEFAULT_KEY_ID}:v2"}
-
 @app.get("/api/keys")
 async def list_keys():
     return {"keys": kms.list_keys()}
+
+@app.post("/api/rotate")
+async def rotate_key(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    token = authorization.split(" ")[1]
+
+    if not verify_admin(token):
+        raise HTTPException(status_code=403, detail="Admin role required")
+
+    new_secret = os.urandom(32).hex()
+    rotation_manager.rotate_with_grace(DEFAULT_KEY_ID, new_secret)
+    return {"message": "Key rotated", "new_key_id": f"{DEFAULT_KEY_ID}:v2"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5000)
