@@ -92,11 +92,9 @@ async def public_endpoint(
                 raise HTTPException(status_code=401, detail="Nonce already used")
             nonce_store[x_nonce] = True
         
-        import asyncio
-        loop = asyncio.get_event_loop()
-        body_bytes = request.body()
-        body = loop.run_until_complete(body_bytes) if not body_bytes.done() else body_bytes.result()
-        body_str = body.decode()
+        # --- SỬA LỖI Ở ĐÂY ---
+        body_bytes = await request.body()
+        body_str = body_bytes.decode()
         canonical = f"{request.method}|{request.url.path}|{x_timestamp}|{x_nonce}|{body_str}"
         expected = hmac.new(HMAC_SECRET, canonical.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, x_signature):
