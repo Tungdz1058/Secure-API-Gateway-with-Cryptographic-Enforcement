@@ -8,6 +8,7 @@ import hashlib
 import os
 import requests
 import time
+import uuid
 from datetime import datetime, timezone
 from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
 from typing import Optional, Tuple
@@ -39,8 +40,10 @@ try:
 except Exception as e:
     USE_REDIS = False
     nonce_store = {}
+    user_sessions = {}
     print(f"Redis not available: {e}")
 
+# ========== TOKEN REVOCATION ==========
 REVOKED_TOKENS = set()
 REVOKED_TOKENS_REDIS_KEY = "revoked_tokens"
 
@@ -56,6 +59,26 @@ def revoke_token(token_hash: str):
     else:
         REVOKED_TOKENS.add(token_hash)
 
+# ========== SESSION MANAGEMENT ==========
+def get_user_session(user_id: str) -> Optional[str]:
+    if USE_REDIS:
+        return redis_client.get(f"user:{user_id}:session_id")
+    return user_sessions.get(user_id)
+
+def set_user_session(user_id: str, session_id: str):
+    if USE_REDIS:
+        redis_client.set(f"user:{user_id}:session_id", session_id)
+        redis_client.expire(f"user:{user_id}:session_id", 86400)
+    else:
+        user_sessions[user_id] = session_id
+
+def clear_user_session(user_id: str):
+    if USE_REDIS:
+        redis_client.delete(f"user:{user_id}:session_id")
+    else:
+        user_sessions.pop(user_id, None)
+
+# ========== KMS ==========
 class MockKMS:
     def __init__(self, redis_url: Optional[str] = None):
         self.redis_client = None
@@ -150,13 +173,16 @@ def get_hmac_secret() -> bytes:
         secret = os.environ.get("HMAC_SECRET", "my-secret-key-change-in-production")
     return secret.encode()
 
+# ========== JWT ==========
 jwks_client = jwt.PyJWKClient(JWKS_URL)
 
 def verify_jwt(token: str) -> dict:
+    # 1. Kiểm tra token đã bị thu hồi chưa
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     if is_token_revoked(token_hash):
         raise HTTPException(status_code=401, detail="Token revoked")
     
+    # 2. Verify JWT
     signing_key = jwks_client.get_signing_key_from_jwt(token)
     payload = jwt.decode(
         token,
@@ -166,6 +192,15 @@ def verify_jwt(token: str) -> dict:
         issuer=f"https://{AUTH0_DOMAIN}/",
         options={"verify_exp": True}
     )
+    
+    # 3. Kiểm tra session (chỉ khi đã có session)
+    user_id = payload.get("sub")
+    session_id = payload.get("sid")
+    stored_session = get_user_session(user_id)
+    
+    if stored_session and stored_session != session_id:
+        raise HTTPException(status_code=401, detail="Token invalid - new session")
+    
     return payload
 
 def verify_admin(token: str) -> bool:
@@ -178,6 +213,7 @@ def verify_admin(token: str) -> bool:
     except:
         return False
 
+# ========== API ENDPOINTS ==========
 @app.api_route("/api/public", methods=["GET", "POST", "PUT", "DELETE"])
 async def public_endpoint(
     request: Request,
@@ -267,13 +303,45 @@ async def revoke_token_endpoint(authorization: str = Header(None)):
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
     
+    # 1. Thu hồi token
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     revoke_token(token_hash)
     
+    # 2. Xóa session
+    user_id = payload.get("sub")
+    clear_user_session(user_id)
+    
     return {
-        "message": "Token revoked successfully",
-        "user": payload.get("sub"),
+        "message": "Logged out successfully",
+        "user": user_id,
         "revoked_at": datetime.now(timezone.utc).isoformat()
+    }
+
+@app.post("/api/login")
+async def login_endpoint(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    token = authorization.split(" ")[1]
+    
+    try:
+        payload = verify_jwt(token)
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+    
+    # Lưu session khi login
+    user_id = payload.get("sub")
+    session_id = payload.get("sid")
+    
+    # Xóa session cũ (nếu có)
+    clear_user_session(user_id)
+    
+    # Tạo session mới
+    set_user_session(user_id, session_id)
+    
+    return {
+        "message": "Login successful",
+        "user": user_id,
+        "session_id": session_id
     }
 
 if __name__ == "__main__":
