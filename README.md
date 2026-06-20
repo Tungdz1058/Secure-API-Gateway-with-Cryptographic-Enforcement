@@ -1,32 +1,38 @@
-
-```bash
-
 # Secure API Gateway with Cryptographic Enforcement
 
 ## 📌 Mô tả đồ án
 
 Đồ án triển khai **API Gateway an toàn** với các cơ chế mật mã:
-- **OAuth2 / OpenID Connect** (PKCE) - Xác thực người dùng qua Keycloak
+- **OAuth2 / OpenID Connect** (PKCE) - Xác thực người dùng qua Auth0
 - **JWT** (RS256) - Token-based authentication/authorization
 - **HMAC request signing** - Đảm bảo tính toàn vẹn và chống replay
-- **Redis** - Lưu nonce để chống tấn công replay
-- **Kong Gateway** - Reverse proxy (forward request)
+- **Redis / In-memory** - Lưu nonce để chống tấn công replay
+- **Token Revocation** - Thu hồi token khi logout
+- **Session Management** - Active session check
+- **Key Rotation (KMS)** - Xoay vòng HMAC secret
 
 ---
 
 ## 🏗️ Kiến trúc hệ thống
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Website   │────▶│     Kong    │────▶│   Backend   │────▶│   Redis     │
-│   (SPA)     │     │  (Gateway)  │     │  (FastAPI)  │     │  (Nonce)    │
-└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
-       │                   │                    │                    │
-       ▼                   ▼                    ▼                    ▼
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Keycloak   │     │   JWT       │     │   HMAC      │     │   User      │
-│   (IdP)     │     │  Verify     │     │  Verify     │     │   Info      │
-└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                               HỆ THỐNG                                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────────┐     ┌─────────────────────┐     ┌─────────────────┐   │
+│  │   Website   │────▶│   Backend FastAPI   │────▶│     Redis       │   │
+│  │   (Vercel)  │     │   (API Gateway +    │     │  (Nonce Store)  │   │
+│  │             │     │    Crypto Enforce)  │     │                 │   │
+│  └─────────────┘     └─────────────────────┘     └─────────────────┘   │
+│         │                     │                         │              │
+│         ▼                     ▼                         ▼              │
+│  ┌─────────────┐     ┌─────────────────────┐     ┌─────────────────┐   │
+│  │   Auth0     │     │   JWT + HMAC +      │     │   Session       │   │
+│  │   (IdP)     │     │   Session + Revoke  │     │   Store         │   │
+│  └─────────────┘     └─────────────────────┘     └─────────────────┘   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -35,18 +41,35 @@
 
 | Thành phần | Công nghệ | Vai trò |
 |------------|-----------|---------|
-| **Identity Provider** | Keycloak 22.0 | Cấp JWT token, quản lý danh tính |
-| **API Gateway** | Kong 3.7 | Reverse proxy (forward request) |
-| **Backend** | FastAPI (Python) | Xác thực JWT, HMAC, nonce |
-| **Nonce Store** | Redis | Lưu nonce đã dùng, chống replay |
+| **Identity Provider** | Auth0 | Cấp JWT token, quản lý danh tính |
+| **API Gateway + Backend** | FastAPI (Python) | Xác thực JWT, HMAC, nonce, session, revocation |
+| **Nonce Store** | Redis / In-memory | Lưu nonce đã dùng, chống replay |
 | **Website** | HTML/JS (SPA) | OAuth2 PKCE, gọi API |
+| **Deployment** | Vercel (FE), Render (BE) | Cloud deployment |
+
+---
+
+## 🔐 Các cơ chế bảo mật đã triển khai
+
+| STT | Cơ chế | Vị trí triển khai |
+|-----|--------|-------------------|
+| 1 | **OAuth2 + PKCE** | Website (Auth0) |
+| 2 | **JWT RS256 Verification** | Backend FastAPI |
+| 3 | **HMAC Request Signing** | Backend FastAPI |
+| 4 | **Nonce (chống replay)** | Backend FastAPI + Redis |
+| 5 | **Timestamp (60s)** | Backend FastAPI |
+| 6 | **Token Revocation** | Backend FastAPI |
+| 7 | **Session Management** | Backend FastAPI |
+| 8 | **Key Rotation (KMS)** | Backend FastAPI |
+| 9 | **Admin Role Check** | Backend FastAPI |
+| 10 | **CORS** | Backend FastAPI |
 
 ---
 
 ## 📋 Yêu cầu hệ thống
 
 - **Ubuntu 22.04 / 24.04** (hoặc WSL2 trên Windows)
-- **Docker** và **Docker Compose**
+- **Docker** (cho Redis)
 - **Python 3.10+**
 - **Git**
 
@@ -70,14 +93,7 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3️⃣ Khởi động các container (Keycloak, PostgreSQL, Kong)
-
-```bash
-cd infra
-docker compose -f docker-compose.yml -f docker-compose.kong.yml up -d
-```
-
-### 4️⃣ Khởi động Redis (lưu nonce)
+### 3️⃣ Khởi động Redis (lưu nonce)
 
 ```bash
 docker run -d --name redis -p 6379:6379 redis
@@ -85,55 +101,7 @@ docker run -d --name redis -p 6379:6379 redis
 docker start redis
 ```
 
-### 5️⃣ Kiểm tra các container đã chạy
-
-```bash
-docker ps
-```
-
-Bạn sẽ thấy:
-- `infra-postgres-1` (PostgreSQL)
-- `infra-keycloak-1` (Keycloak, cổng 8080)
-- `infra-kong-1` (Kong, cổng 8000)
-- `redis` (Redis, cổng 6379)
-
-### 6️⃣ Cấu hình Keycloak
-
-Truy cập: `http://localhost:8080`
-
-- **Username:** `admin`
-- **Password:** `admin`
-
-#### Tạo Realm `api-gateway-demo`
-- Nhấn **Create realm**
-- **Name:** `api-gateway-demo`
-- Nhấn **Create**
-
-#### Tạo Client `api-spa` (public client)
-- Vào **Clients** → **Create client**
-- **Client ID:** `api-spa`
-- **Capability config:**
-  - Client authentication: `OFF`
-  - Standard flow: `ON`
-- **Login settings:**
-  - Valid redirect URIs: `http://localhost:3000/*`
-  - Web origins: `http://localhost:3000`
-- Nhấn **Save**
-
-#### Tạo User `demo`
-- Vào **Users** → **Create new user**
-- **Username:** `demo`
-- **Email:** `demo@example.com`
-- **Email verified:** `ON`
-- Nhấn **Create**
-- Vào tab **Credentials** → **Set password**
-- **Password:** `demo123`
-- **Temporary:** `OFF`
-- Nhấn **Set password**
-
-### 7️⃣ Khởi động Backend (FastAPI)
-
-Mở **Terminal mới**:
+### 4️⃣ Khởi động Backend FastAPI (API Gateway)
 
 ```bash
 cd ~/Final_Project/Secure-API-Gateway-with-Cryptographic-Enforcement
@@ -141,86 +109,118 @@ source venv/bin/activate
 python services/backend.py
 ```
 
-Giữ terminal này chạy. Bạn sẽ thấy dòng:
-```
-[OK] Redis connected
-INFO:     Uvicorn running on http://0.0.0.0:5000
-```
+Giữ terminal này chạy.
 
-### 8️⃣ Khởi động Website (SPA)
-
-Mở **Terminal mới**:
+### 5️⃣ Khởi động Website
 
 ```bash
 cd ~/Final_Project/Secure-API-Gateway-with-Cryptographic-Enforcement/clients/spa
 python3 -m http.server 3000
 ```
 
-### 9️⃣ Truy cập website
+### 6️⃣ Cấu hình Auth0
 
-Mở trình duyệt: `http://localhost:3000`
+**Auth0 Dashboard → Applications → Create Application (SPA)**
 
-#### Đăng nhập
-- Nhấn nút **Login with Keycloak (PKCE)**
-- Chuyển hướng đến Keycloak
-- Đăng nhập với `demo` / `demo123`
-- Đồng ý cấp quyền
-- Redirect về website, hiển thị token và thông tin user
+- **Allowed Callback URLs:** `http://localhost:3000`, `https://secure-api-gateway-with-cryptograph.vercel.app`
+- **Allowed Logout URLs:** `http://localhost:3000`, `https://secure-api-gateway-with-cryptograph.vercel.app`
+- **Allowed Web Origins:** `http://localhost:3000`, `https://secure-api-gateway-with-cryptograph.vercel.app`
 
-#### Gọi API
-- Nhấn nút **Call API**
-- Kết quả hiển thị:
-```json
-{
-  "message": "API called successfully",
-  "jwt_verified": true,
-  "hmac_verified": false,
-  "user": "demo",
-  "email": "demo@gmail.com"
-}
-```
+**Auth0 Dashboard → APIs → Create API**
 
-### 🔟 Kiểm tra HMAC signing (client Python)
-
-Mở **Terminal mới**:
-
-```bash
-cd ~/Final_Project/Secure-API-Gateway-with-Cryptographic-Enforcement
-source venv/bin/activate
-python clients/hmac_client.py
-```
-
-Kết quả mong đợi:
-```
-Status: 200
-Response: {'message': 'API called successfully', 'jwt_verified': True, 'hmac_verified': True, 'user': 'demo', 'email': 'demo@gmail.com'}
-```
-
-### 1️⃣1️⃣ Kiểm tra chống replay
-
-Chạy client HMAC **lần đầu** → thành công.
-Chạy client HMAC **lần thứ hai ngay lập tức** → lỗi 401 với message `"Nonce already used"`.
+- **Identifier:** `https://api-gateway-demo.com`
+- **Signing Algorithm:** RS256
+- **Enable RBAC:** ON
+- **Add Permissions in the Access Token:** ON
 
 ---
 
-## 🧪 Kiểm thử bằng curl
+## 🧪 Test luồng bảo mật trên Console (F12)
 
-### Lấy token từ Keycloak (dùng password flow - chỉ để test)
+### 1. Lấy token và Login (Active Session)
 
-```bash
-curl -X POST http://localhost:8080/realms/api-gateway-demo/protocol/openid-connect/token \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "client_id=api-spa" \
-  -d "username=demo" \
-  -d "password=demo123" \
-  -d "grant_type=password"
+```javascript
+var token = "YOUR_JWT_TOKEN_FROM_AUTH0";
+
+// Active session
+fetch('https://secure-api-gateway-backend.onrender.com/api/login', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token }
+})
+.then(res => res.json())
+.then(data => console.log('Login:', data));
+// {"message":"Login successful","user":"auth0|..."}
 ```
 
-### Gọi API qua Kong
+### 2. Gọi API (JWT Only)
 
-```bash
-TOKEN="<access_token từ response trên>"
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/public
+```javascript
+fetch('https://secure-api-gateway-backend.onrender.com/api/public', {
+    headers: { 'Authorization': 'Bearer ' + token }
+})
+.then(res => res.json())
+.then(data => console.log('API:', data));
+// {"message":"API called successfully","jwt_verified":true,"hmac_verified":false,...}
+```
+
+### 3. Gọi API có HMAC
+
+```javascript
+var timestamp = Math.floor(Date.now() / 1000).toString();
+var nonce = crypto.randomUUID();
+var signature = "YOUR_HMAC_SIGNATURE"; // Tính HMAC
+
+fetch('https://secure-api-gateway-backend.onrender.com/api/public', {
+    headers: {
+        'Authorization': 'Bearer ' + token,
+        'X-Timestamp': timestamp,
+        'X-Nonce': nonce,
+        'X-Signature': signature
+    }
+})
+.then(res => res.json())
+.then(data => console.log('API + HMAC:', data));
+// {"message":"API called successfully","jwt_verified":true,"hmac_verified":true,...}
+```
+
+### 4. Logout (Token Revocation)
+
+```javascript
+fetch('https://secure-api-gateway-backend.onrender.com/api/revoke', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token }
+})
+.then(res => res.json())
+.then(data => console.log('Logout:', data));
+// {"message":"Logged out successfully","user":"auth0|..."}
+
+// Token cũ bị từ chối
+fetch('https://secure-api-gateway-backend.onrender.com/api/public', {
+    headers: { 'Authorization': 'Bearer ' + token }
+})
+.then(res => res.json())
+.then(data => console.log('Sau logout:', data));
+// {"detail":"Token revoked"}
+```
+
+### 5. Key Rotation (Admin Only)
+
+```javascript
+var adminToken = "YOUR_ADMIN_TOKEN";
+
+// Xem danh sách key
+fetch('https://secure-api-gateway-backend.onrender.com/api/keys')
+.then(res => res.json())
+.then(data => console.log('Keys:', data));
+
+// Rotate key (cần admin)
+fetch('https://secure-api-gateway-backend.onrender.com/api/rotate', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + adminToken }
+})
+.then(res => res.json())
+.then(data => console.log('Rotate:', data));
+// {"message":"Key rotated","new_key_id":"hmac-v1:..."}
 ```
 
 ---
@@ -229,43 +229,38 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/public
 
 ```
 Secure-API-Gateway-with-Cryptographic-Enforcement/
-├── infra/                      # Docker và cấu hình Kong
-│   ├── docker-compose.yml
-│   ├── docker-compose.kong.yml
-│   └── kong.yml
-├── services/                   # Backend FastAPI
-│   └── backend.py
-├── clients/                    # Client apps
+├── services/
+│   └── backend.py              # FastAPI (API Gateway + Crypto)
+├── clients/
 │   ├── spa/
 │   │   └── index.html          # Website OAuth2 PKCE
 │   └── hmac_client.py          # Client HMAC signing
-├── requirements.txt            # Python dependencies
-└── README.md                   # Hướng dẫn này
+├── tests/                      # Unit tests
+│   ├── test_backend.py
+│   └── test_security.py
+├── requirements.txt
+└── README.md
 ```
 
 ---
 
-## 📊 Luồng hoạt động chi tiết
+## 📊 Tóm tắt các API endpoints
 
-### 1. OAuth2 PKCE (Website)
-1. Website tạo `code_verifier` và `code_challenge`
-2. Redirect đến Keycloak kèm `code_challenge`
-3. Người dùng đăng nhập, Keycloak tạo `code`
-4. Website đổi `code` + `verifier` lấy `access_token`
+| API | Method | Mô tả | Yêu cầu |
+|-----|--------|-------|---------|
+| `/api/login` | POST | Active session | JWT |
+| `/api/public` | GET | Gọi API (JWT + HMAC) | JWT |
+| `/api/revoke` | POST | Logout / Revoke token | JWT |
+| `/api/keys` | GET | Xem danh sách HMAC key | - |
+| `/api/rotate` | POST | Xoay HMAC key (admin) | JWT (admin role) |
+| `/admin/health` | GET | Health check | - |
 
-### 2. Gọi API (chỉ JWT)
-1. Website gửi request với header `Authorization: Bearer {token}`
-2. Kong forward request đến backend
-3. Backend verify JWT (chữ ký, exp, aud, iss)
-4. Backend trả về response
+---
 
-### 3. Gọi API có HMAC (machine-to-machine)
-1. Client tạo `timestamp`, `nonce`, `canonical string`
-2. Client tính HMAC signature
-3. Gửi request kèm JWT + 3 header HMAC
-4. Backend verify:
-   - JWT (như trên)
-   - Timestamp (còn hiệu lực 60s)
-   - Nonce (chưa dùng)
-   - HMAC signature
-5. Trả về `hmac_verified: true`
+## 🧑‍💻 Thành viên nhóm
+
+| STT | Họ và tên | MSSV |
+|-----|-----------|------|
+| 1 | Lê Đình Tùng | 24162140 |
+| 2 | Trần Ngô Anh Tú | 24152141 |
+| 3 | Cao Nhứt Thạnh | 24162118 |
