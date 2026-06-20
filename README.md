@@ -135,7 +135,7 @@ python3 -m http.server 3000
 
 ---
 
-## 🧪 Test luồng bảo mật trên Console (F12)
+## 🧪 Test luồng bảo mật
 
 ### 1. Lấy token và Login (Active Session)
 
