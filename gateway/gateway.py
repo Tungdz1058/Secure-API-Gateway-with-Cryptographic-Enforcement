@@ -27,7 +27,7 @@ SERVICE_MAP = {
 
 # ========== ROLE REQUIREMENTS ==========
 ROLE_REQUIREMENTS = {
-    "admin": ["admin"],  # Chỉ admin mới vào /api/admin/*
+    "admin": ["admin"],
     "transfer": ["user", "admin"],
     "account": ["user", "admin"]
 }
@@ -49,13 +49,11 @@ async def gateway(request: Request, service: str, path: str):
         if not authorization:
             raise HTTPException(status_code=401, detail="Missing Authorization header")
         
-        # Lấy các header HMAC
         x_timestamp = request.headers.get("x-timestamp", "")
         x_nonce = request.headers.get("x-nonce", "")
         x_signature = request.headers.get("x-signature", "")
         required_role = ROLE_REQUIREMENTS[service][0]
         
-        # Gọi Auth Service để verify
         async with httpx.AsyncClient() as client:
             try:
                 verify_response = await client.post(
@@ -71,9 +69,10 @@ async def gateway(request: Request, service: str, path: str):
                 )
                 
                 if verify_response.status_code != 200:
+                    error_detail = verify_response.json().get("detail", "Authentication failed")
                     raise HTTPException(
                         status_code=verify_response.status_code,
-                        detail=verify_response.json().get("detail", "Authentication failed")
+                        detail=error_detail
                     )
             except httpx.ConnectError:
                 raise HTTPException(status_code=503, detail="Auth Service unavailable")
@@ -84,12 +83,16 @@ async def gateway(request: Request, service: str, path: str):
     else:
         forward_path = path
     
+    # Forward tất cả header (bao gồm HMAC)
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    
     async with httpx.AsyncClient() as client:
         try:
             response = await client.request(
                 method=request.method,
                 url=f"{service_url}/{forward_path}",
-                headers={k: v for k, v in request.headers.items() if k != "host"},
+                headers=headers,
                 content=await request.body()
             )
             return response.json()
