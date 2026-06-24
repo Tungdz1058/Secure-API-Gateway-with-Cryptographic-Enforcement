@@ -73,23 +73,43 @@ async def gateway(request: Request, service: str, path: str):
         # Gọi Auth Service để verify role
         async with httpx.AsyncClient() as client:
             try:
+                auth_url = f"{SERVICE_MAP['auth']}/auth/verify"
+                print(f"Calling Auth Service: {auth_url}")
+                
                 verify_response = await client.post(
-                    f"{SERVICE_MAP['auth']}/auth/verify",
+                    auth_url,
                     headers={
                         "Authorization": authorization,
                         "Content-Type": "application/json",
                         "X-Required-Role": required_role
-                    }
+                    },
+                    timeout=5.0
                 )
                 
+                # Kiểm tra response
                 if verify_response.status_code != 200:
-                    error_detail = verify_response.json().get("detail", "Authentication failed")
+                    error_detail = verify_response.text if verify_response.text else "Authentication failed"
+                    print(f"Auth Service error: {verify_response.status_code} - {error_detail}")
                     raise HTTPException(
                         status_code=verify_response.status_code,
                         detail=error_detail
                     )
+                
+                # Parse JSON
+                try:
+                    verify_data = verify_response.json()
+                    if not verify_data.get("verified", False):
+                        raise HTTPException(status_code=403, detail="Authentication failed")
+                except Exception as e:
+                    print(f"Auth Service returned non-JSON: {verify_response.text[:200]}")
+                    raise HTTPException(status_code=502, detail="Auth Service returned invalid response")
+                
             except httpx.ConnectError:
+                print("Auth Service unavailable")
                 raise HTTPException(status_code=503, detail="Auth Service unavailable")
+            except httpx.TimeoutException:
+                print("Auth Service timeout")
+                raise HTTPException(status_code=504, detail="Auth Service timeout")
     
     # ===== FORWARD REQUEST =====
     if service in PREFIX_SERVICES:
@@ -108,7 +128,14 @@ async def gateway(request: Request, service: str, path: str):
                 headers=headers,
                 content=await request.body()
             )
-            return response.json()
+            
+            # Kiểm tra response trước khi parse JSON
+            content_type = response.headers.get("content-type", "")
+            if "application/json" in content_type:
+                return response.json()
+            else:
+                return {"error": "Service returned non-JSON response", "status": response.status_code}
+                
         except httpx.ConnectError:
             raise HTTPException(status_code=503, detail=f"Service {service} unavailable")
 
