@@ -26,7 +26,7 @@ app.add_middleware(
 )
 
 # ========== CONFIG ==========
-CACHE_TTL = 600
+CACHE_TTL = 60  # Giảm xuống 60 giây
 MAX_RETRIES = 3
 
 # ========== SERVICE MAP ==========
@@ -49,11 +49,18 @@ PREFIX_SERVICES = ["auth"]
 # ========== CACHE ==========
 role_cache = {}
 
-def get_cached_roles(token: str):
-    """Returns (roles, hmac_verified, jwt_verified, session_active) or (None, None, None, None)"""
+def get_cache_key(token: str, nonce: str = None) -> str:
+    """Tạo cache key bao gồm token và nonce để prevent replay attacks"""
     token_hash = hashlib.sha256(token.encode()).hexdigest()
-    if token_hash in role_cache:
-        cache_entry = role_cache[token_hash]
+    if nonce:
+        return f"{token_hash}:{nonce}"
+    return token_hash
+
+def get_cached_roles(token: str, nonce: str = None):
+    """Returns (roles, hmac_verified, jwt_verified, session_active)"""
+    cache_key = get_cache_key(token, nonce)
+    if cache_key in role_cache:
+        cache_entry = role_cache[cache_key]
         if time.time() < cache_entry["expiry"]:
             return (
                 cache_entry.get("roles", []),
@@ -62,18 +69,25 @@ def get_cached_roles(token: str):
                 cache_entry.get("session_active", False)
             )
         else:
-            del role_cache[token_hash]
+            del role_cache[cache_key]
     return None, None, None, None
 
-def set_cached_roles(token: str, roles: list, hmac_verified: bool = True, jwt_verified: bool = True, session_active: bool = True, ttl: int = CACHE_TTL):
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    role_cache[token_hash] = {
+def set_cached_roles(token: str, nonce: str, roles: list, hmac_verified: bool = True, 
+                     jwt_verified: bool = True, session_active: bool = True, ttl: int = CACHE_TTL):
+    """Cache chỉ khi tất cả verifications đều thành công"""
+    if not (hmac_verified and jwt_verified and session_active):
+        logger.warning(f"⚠️ Not caching failed verification")
+        return
+    
+    cache_key = get_cache_key(token, nonce)
+    role_cache[cache_key] = {
         "roles": roles,
         "hmac_verified": hmac_verified,
         "jwt_verified": jwt_verified,
         "session_active": session_active,
         "expiry": time.time() + ttl
     }
+    logger.info(f"✅ Cached verification for nonce: {nonce}")
 
 # ========== AUTH SERVICE CALL ==========
 async def call_auth_service_with_retry(auth_url: str, headers: dict, body: str = "", max_retries: int = MAX_RETRIES):
@@ -122,10 +136,18 @@ async def gateway(request: Request, service: str, path: str):
         required_roles = ROLE_REQUIREMENTS[service]
         required_role = required_roles[0]
         
-        # ===== CHECK CACHE =====
-        cached_roles, cached_hmac, cached_jwt, cached_session = get_cached_roles(token)
+        # Lấy headers
+        x_timestamp = request.headers.get("x-timestamp", "")
+        x_nonce = request.headers.get("x-nonce", "")
+        x_signature = request.headers.get("x-signature", "")
+        
+        if not x_timestamp or not x_nonce or not x_signature:
+            raise HTTPException(status_code=401, detail="Missing HMAC headers")
+        
+        # ===== CHECK CACHE (include nonce) =====
+        cached_roles, cached_hmac, cached_jwt, cached_session = get_cached_roles(token, x_nonce)
         if cached_roles is not None:
-            logger.info(f"✅ Cache hit for token")
+            logger.info(f"✅ Cache hit for nonce: {x_nonce}")
             
             # Kiểm tra tất cả điều kiện từ cache
             if not cached_jwt:
@@ -137,18 +159,9 @@ async def gateway(request: Request, service: str, path: str):
             if not any(role in cached_roles for role in required_roles):
                 raise HTTPException(status_code=403, detail=f"Role required: {required_roles}")
             
-            # Cache valid, skip auth verification
             logger.info(f"✅ Cache valid, skipping auth verification")
         else:
             # ===== CALL AUTH SERVICE =====
-            x_timestamp = request.headers.get("x-timestamp", "")
-            x_nonce = request.headers.get("x-nonce", "")
-            x_signature = request.headers.get("x-signature", "")
-
-            if service in ROLE_REQUIREMENTS:
-                if not x_timestamp or not x_nonce or not x_signature:
-                    raise HTTPException(status_code=401, detail="Missing HMAC headers")
-            
             body_bytes = await request.body()
             body_str = body_bytes.decode() if body_bytes else ""
             
@@ -180,7 +193,7 @@ async def gateway(request: Request, service: str, path: str):
                 raise HTTPException(status_code=403, detail=error_detail)
             
             verify_data = verify_response.json()
-            logger.info(f"✅ Auth response: {verify_data}")
+            logger.info(f"✅ Auth response received")
             
             # ===== EXTRACT AND VALIDATE =====
             hmac_verified = verify_data.get("hmac_verified", False)
@@ -188,8 +201,11 @@ async def gateway(request: Request, service: str, path: str):
             session_active = verify_data.get("session_active", False)
             roles = verify_data.get("roles", [])
             
-            # Lưu vào cache
-            set_cached_roles(token, roles, hmac_verified, jwt_verified, session_active)
+            # ✅ CHỈ CACHE KHI TẤT CẢ ĐỀU ĐÚNG
+            if hmac_verified and jwt_verified and session_active:
+                set_cached_roles(token, x_nonce, roles, hmac_verified, jwt_verified, session_active)
+            else:
+                logger.warning(f"⚠️ Not caching failed verification for nonce: {x_nonce}")
             
             # Kiểm tra tất cả điều kiện
             if not jwt_verified:
@@ -239,21 +255,11 @@ async def health():
         "cache_size": len(role_cache)
     }
 
-@app.get("/cache/stats")
-async def cache_stats():
-    """Debug endpoint to view cache statistics"""
-    return {
-        "cache_size": len(role_cache),
-        "cache_entries": [
-            {
-                "token_hash": k,
-                "roles": v.get("roles", []),
-                "hmac_verified": v.get("hmac_verified", False),
-                "expiry": v.get("expiry", 0)
-            }
-            for k, v in list(role_cache.items())[:10]  # Show first 10 entries
-        ]
-    }
+@app.get("/cache/clear")
+async def clear_cache():
+    """Clear all cache"""
+    role_cache.clear()
+    return {"message": "Cache cleared", "cache_size": 0}
 
 if __name__ == "__main__":
     import uvicorn
