@@ -4,6 +4,7 @@ import httpx
 import os
 import hmac
 import hashlib
+import time
 
 app = FastAPI(title="API Gateway")
 
@@ -39,6 +40,26 @@ ROLE_REQUIREMENTS = {
 
 PREFIX_SERVICES = ["auth"]
 
+# ========== CACHE ==========
+role_cache = {}
+
+def get_cached_roles(token: str) -> list:
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    if token_hash in role_cache:
+        cache_entry = role_cache[token_hash]
+        if time.time() < cache_entry["expiry"]:
+            return cache_entry["roles"]
+        else:
+            del role_cache[token_hash]
+    return None
+
+def set_cached_roles(token: str, roles: list, ttl: int = 300):
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    role_cache[token_hash] = {
+        "roles": roles,
+        "expiry": time.time() + ttl
+    }
+
 print("Service Map:", SERVICE_MAP)
 
 # ========== ROUTE ==========
@@ -54,62 +75,64 @@ async def gateway(request: Request, service: str, path: str):
         if not authorization:
             raise HTTPException(status_code=401, detail="Missing Authorization header")
         
-        x_timestamp = request.headers.get("x-timestamp", "")
-        x_nonce = request.headers.get("x-nonce", "")
-        x_signature = request.headers.get("x-signature", "")
+        token = authorization.split(" ")[1] if authorization.startswith("Bearer ") else None
+        if not token:
+            raise HTTPException(status_code=401, detail="Invalid Authorization header")
+        
         required_role = ROLE_REQUIREMENTS[service][0]
         
-        # Verify HMAC tại Gateway
-        method = request.method
-        full_path = f"/api/{service}/{path}"
-        body = await request.body()
-        body_str = body.decode() if body else ""
-        canonical = f"{method}|{full_path}|{x_timestamp}|{x_nonce}|{body_str}"
-        expected = hmac.new(HMAC_SECRET, canonical.encode(), hashlib.sha256).hexdigest()
-        
-        if not hmac.compare_digest(expected, x_signature):
-            raise HTTPException(status_code=401, detail="Invalid HMAC signature")
-        
-        # Gọi Auth Service để verify role
-        async with httpx.AsyncClient() as client:
-            try:
-                auth_url = f"{SERVICE_MAP['auth']}/auth/verify"
-                print(f"Calling Auth Service: {auth_url}")
-                
-                verify_response = await client.post(
-                    auth_url,
-                    headers={
-                        "Authorization": authorization,
-                        "Content-Type": "application/json",
-                        "X-Required-Role": required_role
-                    },
-                    timeout=5.0
-                )
-                
-                # Kiểm tra response
-                if verify_response.status_code != 200:
-                    error_detail = verify_response.text if verify_response.text else "Authentication failed"
-                    print(f"Auth Service error: {verify_response.status_code} - {error_detail}")
-                    raise HTTPException(
-                        status_code=verify_response.status_code,
-                        detail=error_detail
-                    )
-                
-                # Parse JSON
+        # Kiểm tra cache
+        cached_roles = get_cached_roles(token)
+        if cached_roles is not None:
+            if required_role in cached_roles:
+                print(f"✅ Cache hit: token has role {required_role}")
+            else:
+                raise HTTPException(status_code=403, detail=f"Role required: {required_role}")
+        else:
+            x_timestamp = request.headers.get("x-timestamp", "")
+            x_nonce = request.headers.get("x-nonce", "")
+            x_signature = request.headers.get("x-signature", "")
+            
+            # Verify HMAC
+            method = request.method
+            full_path = f"/api/{service}/{path}"
+            body = await request.body()
+            body_str = body.decode() if body else ""
+            canonical = f"{method}|{full_path}|{x_timestamp}|{x_nonce}|{body_str}"
+            expected = hmac.new(HMAC_SECRET, canonical.encode(), hashlib.sha256).hexdigest()
+            
+            if not hmac.compare_digest(expected, x_signature):
+                raise HTTPException(status_code=401, detail="Invalid HMAC signature")
+            
+            # Gọi Auth Service
+            async with httpx.AsyncClient() as client:
                 try:
+                    verify_response = await client.post(
+                        f"{SERVICE_MAP['auth']}/auth/verify",
+                        headers={
+                            "Authorization": authorization,
+                            "Content-Type": "application/json"
+                        },
+                        timeout=5.0
+                    )
+                    
+                    if verify_response.status_code != 200:
+                        error_detail = verify_response.text if verify_response.text else "Authentication failed"
+                        raise HTTPException(status_code=verify_response.status_code, detail=error_detail)
+                    
                     verify_data = verify_response.json()
-                    if not verify_data.get("verified", False):
-                        raise HTTPException(status_code=403, detail="Authentication failed")
-                except Exception as e:
-                    print(f"Auth Service returned non-JSON: {verify_response.text[:200]}")
-                    raise HTTPException(status_code=502, detail="Auth Service returned invalid response")
-                
-            except httpx.ConnectError:
-                print("Auth Service unavailable")
-                raise HTTPException(status_code=503, detail="Auth Service unavailable")
-            except httpx.TimeoutException:
-                print("Auth Service timeout")
-                raise HTTPException(status_code=504, detail="Auth Service timeout")
+                    roles = verify_data.get("roles", [])
+                    
+                    # Cache roles
+                    set_cached_roles(token, roles, ttl=300)
+                    
+                    if required_role not in roles:
+                        raise HTTPException(status_code=403, detail=f"Role required: {required_role}")
+                    
+                except httpx.ConnectError:
+                    raise HTTPException(status_code=503, detail="Auth Service unavailable")
+                except httpx.TimeoutException:
+                    raise HTTPException(status_code=504, detail="Auth Service timeout")
     
     # ===== FORWARD REQUEST =====
     if service in PREFIX_SERVICES:
@@ -129,7 +152,6 @@ async def gateway(request: Request, service: str, path: str):
                 content=await request.body()
             )
             
-            # Kiểm tra response trước khi parse JSON
             content_type = response.headers.get("content-type", "")
             if "application/json" in content_type:
                 return response.json()
