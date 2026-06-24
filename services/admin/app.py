@@ -7,12 +7,14 @@ from shared.models import User
 
 app = FastAPI(title="Admin Service")
 
+# Mock users
 users = {
     "user1": {"user_id": "user1", "username": "demo", "email": "demo@bank.com", "full_name": "Demo User", "role": "user"},
     "user2": {"user_id": "user2", "username": "alice", "email": "alice@bank.com", "full_name": "Alice Johnson", "role": "user"},
     "admin": {"user_id": "admin", "username": "admin", "email": "admin@bank.com", "full_name": "Admin", "role": "admin"}
 }
 
+# ✅ KHÔNG KIỂM TRA ROLE - GATEWAY ĐÃ LÀM
 @app.get("/users")
 async def list_users(authorization: str = Header(None)):
     return {"users": list(users.values())}
@@ -27,7 +29,6 @@ async def get_user(user_id: str, authorization: str = Header(None)):
 async def create_user(user: User, authorization: str = Header(None)):
     if user.user_id in users:
         raise HTTPException(status_code=400, detail="User already exists")
-    
     users[user.user_id] = user.dict()
     return {"message": "User created", "user": user}
 
@@ -35,7 +36,6 @@ async def create_user(user: User, authorization: str = Header(None)):
 async def delete_user(user_id: str, authorization: str = Header(None)):
     if user_id not in users:
         raise HTTPException(status_code=404, detail="User not found")
-    
     del users[user_id]
     return {"message": f"User {user_id} deleted"}
 
@@ -43,32 +43,18 @@ async def delete_user(user_id: str, authorization: str = Header(None)):
 async def update_user_role(user_id: str, role: str, authorization: str = Header(None)):
     if user_id not in users:
         raise HTTPException(status_code=404, detail="User not found")
-    
     users[user_id]["role"] = role
     return {"message": f"User {user_id} role updated to {role}", "user": users[user_id]}
 
 @app.get("/system/stats")
 async def system_stats(authorization: str = Header(None)):
-    accounts = {
-        "ACC001": {"balance": 15000000},
-        "ACC002": {"balance": 5000000},
-        "ACC003": {"balance": 100000000}
-    }
-    total_balance = sum(a["balance"] for a in accounts.values())
-    
     return {
         "total_users": len(users),
-        "total_accounts": len(accounts),
-        "total_balance": total_balance,
+        "total_accounts": 4,
+        "total_balance": 120000000,
         "system_status": "operational",
         "uptime": "99.95%"
     }
-@app.get("/")
-async def root():
-    return {"message": "Service is running", "service": "admin"}  # Thay "transfer" bằng tên service tương ứng
-@app.get("/health")
-async def health():
-    return {"status": "ok", "service": "admin"}  # Thay "transfer" bằng tên service tương ứng
 
 @app.get("/health")
 async def health():
