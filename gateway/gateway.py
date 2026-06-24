@@ -19,10 +19,10 @@ app.add_middleware(
 
 # ========== SERVICE MAP ==========
 SERVICE_MAP = {
-    "auth": os.environ.get("AUTH_SERVICE_URL", "https://bank-auth.onrender.com"),
-    "transfer": os.environ.get("TRANSFER_SERVICE_URL", "https://bank-transfer.onrender.com"),
-    "account": os.environ.get("ACCOUNT_SERVICE_URL", "https://bank-account.onrender.com"),
-    "admin": os.environ.get("ADMIN_SERVICE_URL", "https://bank-admin.onrender.com")
+    "auth": "https://bank-auth.onrender.com",
+    "transfer": "https://bank-transfer-vd1p.onrender.com",
+    "account": "https://bank-account-corr.onrender.com",
+    "admin": "https://bank-admin-ou0n.onrender.com"
 }
 
 print("Service Map:", SERVICE_MAP)
