@@ -19,14 +19,13 @@ app.add_middleware(
 
 # ========== SERVICE MAP ==========
 SERVICE_MAP = {
-    "auth": "https://bank-auth.onrender.com",
-    "transfer": "https://bank-transfer-vd1p.onrender.com",
-    "account": "https://bank-account-corr.onrender.com",
-    "admin": "https://bank-admin-ou0n.onrender.com"
+    "auth": os.environ.get("AUTH_SERVICE_URL", "https://bank-auth.onrender.com"),
+    "transfer": os.environ.get("TRANSFER_SERVICE_URL", "https://bank-transfer-vd1p.onrender.com"),
+    "account": os.environ.get("ACCOUNT_SERVICE_URL", "https://bank-account-corr.onrender.com"),
+    "admin": os.environ.get("ADMIN_SERVICE_URL", "https://bank-admin-ou0n.onrender.com")
 }
 
-# Service có prefix trong path
-PREFIX_SERVICES = ["auth"]  # Auth cần prefix /auth
+PREFIX_SERVICES = ["auth"]
 
 print("Service Map:", SERVICE_MAP)
 
@@ -37,13 +36,11 @@ async def gateway(request: Request, service: str, path: str):
     if not service_url:
         raise HTTPException(status_code=404, detail=f"Service {service} not found")
     
-    # Xác định path forward
     if service in PREFIX_SERVICES:
-        forward_path = f"{service}/{path}"  # Auth: /auth/health
+        forward_path = f"{service}/{path}"
     else:
-        forward_path = path  # Transfer: /health
+        forward_path = path
     
-    # Forward request
     async with httpx.AsyncClient() as client:
         try:
             response = await client.request(
