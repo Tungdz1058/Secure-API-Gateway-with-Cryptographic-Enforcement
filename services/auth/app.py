@@ -104,17 +104,6 @@ def set_kms_key(key_id: str, value: str):
     else:
         kms_store[key_id] = value
 
-def list_kms_keys() -> list:
-    if USE_REDIS:
-        keys = redis_client.keys("kms:*")
-        return [k.replace("kms:", "") for k in keys]
-    return list(kms_store.keys())
-
-# Create default key if not exists
-if not get_kms_key(DEFAULT_KEY_ID):
-    set_kms_key(DEFAULT_KEY_ID, os.environ.get("HMAC_SECRET", "my-secret-key-change-in-production"))
-    print(f"KMS: Created default key {DEFAULT_KEY_ID}")
-
 def get_hmac_secret() -> bytes:
     secret = get_kms_key(DEFAULT_KEY_ID)
     if secret:
@@ -162,7 +151,7 @@ async def verify_endpoint(
     x_signature: str = Header(None),
     x_required_role: str = Header(None),
 ):
-    # 1. Kiểm tra JWT
+    # ===== 1. JWT VERIFICATION =====
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Authorization header")
     token = authorization.split(" ")[1]
@@ -176,7 +165,7 @@ async def verify_endpoint(
     except HTTPException as e:
         raise e
 
-    # 2. Kiểm tra HMAC
+    # ===== 2. HMAC VERIFICATION =====
     hmac_verified = False
     if x_timestamp and x_nonce and x_signature:
         try:
@@ -205,7 +194,7 @@ async def verify_endpoint(
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
         hmac_verified = True
 
-    # 3. Kiểm tra role nếu có yêu cầu
+    # ===== 3. ROLE VERIFICATION =====
     if x_required_role:
         roles = jwt_payload.get("https://api-gateway-demo.com/roles", [])
         if x_required_role not in roles:
@@ -214,7 +203,7 @@ async def verify_endpoint(
                 detail=f"Role required: {x_required_role}"
             )
 
-    # 4. Trả về kết quả
+    # ===== 4. RESPONSE =====
     return {
         "verified": True,
         "jwt_verified": True,
