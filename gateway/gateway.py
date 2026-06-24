@@ -32,12 +32,18 @@ JWKS_URL = f"https://{AUTH0_DOMAIN}/.well-known/jwks.json"
 HMAC_SECRET = os.environ.get("HMAC_SECRET", "my-secret-key-change-in-production").encode()
 
 # Redis
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
+REDIS_URL = os.environ.get("REDIS_URL", "")
 try:
-    redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-    redis_client.ping()
-    USE_REDIS = True
-    print("Redis connected")
+    if REDIS_URL:
+        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+        redis_client.ping()
+        USE_REDIS = True
+        print("Redis connected")
+    else:
+        USE_REDIS = False
+        nonce_store = {}
+        session_store = {}
+        print("Redis not available: no URL")
 except Exception as e:
     USE_REDIS = False
     nonce_store = {}
@@ -48,9 +54,9 @@ jwks_client = jwt.PyJWKClient(JWKS_URL)
 
 # ========== SERVICE MAP ==========
 SERVICE_MAP = {
-    "transfer": os.environ.get("TRANSFER_SERVICE_URL", "http://localhost:5001"),
-    "account": os.environ.get("ACCOUNT_SERVICE_URL", "http://localhost:5002"),
-    "admin": os.environ.get("ADMIN_SERVICE_URL", "http://localhost:5003")
+    "transfer": os.environ.get("TRANSFER_SERVICE_URL", "https://bank-transfer.onrender.com"),
+    "account": os.environ.get("ACCOUNT_SERVICE_URL", "https://bank-account.onrender.com"),
+    "admin": os.environ.get("ADMIN_SERVICE_URL", "https://bank-admin.onrender.com")
 }
 
 ROLE_REQUIREMENTS = {
@@ -119,6 +125,22 @@ def check_role(token: str, allowed_roles: list) -> bool:
         return False
 
 # ========== GATEWAY ROUTE ==========
+@app.get("/")
+async def root():
+    return {"message": "Bank API Gateway is running", "status": "ok"}
+
+@app.get("/health")
+async def health():
+    services_status = {}
+    for name, url in SERVICE_MAP.items():
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(f"{url}/health", timeout=2)
+                services_status[name] = "ok" if response.status_code == 200 else "error"
+        except:
+            services_status[name] = "unavailable"
+    return {"status": "ok", "services": services_status}
+
 @app.api_route("/api/{service}/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def gateway(
     request: Request,
@@ -229,19 +251,6 @@ async def revoke(authorization: str = Header(None)):
     clear_active_session(user_id)
     
     return {"message": "Logged out successfully", "user": user_id}
-
-# ========== HEALTH ==========
-@app.get("/health")
-async def health():
-    services_status = {}
-    for name, url in SERVICE_MAP.items():
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(f"{url}/health", timeout=2)
-                services_status[name] = "ok" if response.status_code == 200 else "error"
-        except:
-            services_status[name] = "unavailable"
-    return {"status": "ok", "services": services_status}
 
 if __name__ == "__main__":
     import uvicorn
