@@ -5,6 +5,7 @@ import os
 import hmac
 import hashlib
 import time
+import asyncio
 
 app = FastAPI(title="API Gateway")
 
@@ -25,13 +26,12 @@ HMAC_SECRET = os.environ.get("HMAC_SECRET", "my-secret-key-change-in-production"
 
 # ========== SERVICE MAP ==========
 SERVICE_MAP = {
-    "auth": os.environ.get("AUTH_SERVICE_URL", "https://bank-auth.onrender.com"),
-    "transfer": os.environ.get("TRANSFER_SERVICE_URL", "https://bank-transfer-vd1p.onrender.com"),
-    "account": os.environ.get("ACCOUNT_SERVICE_URL", "https://bank-account-corr.onrender.com"),
-    "admin": os.environ.get("ADMIN_SERVICE_URL", "https://bank-admin-ou0n.onrender.com")
+    "auth": "https://bank-auth.onrender.com",
+    "transfer": "https://bank-transfer-vd1p.onrender.com",
+    "account": "https://bank-account-corr.onrender.com",
+    "admin": "https://bank-admin-ou0n.onrender.com"
 }
 
-# ========== ROLE REQUIREMENTS ==========
 ROLE_REQUIREMENTS = {
     "admin": ["admin"],
     "transfer": ["user", "admin"],
@@ -53,7 +53,7 @@ def get_cached_roles(token: str) -> list:
             del role_cache[token_hash]
     return None
 
-def set_cached_roles(token: str, roles: list, ttl: int = 300):
+def set_cached_roles(token: str, roles: list, ttl: int = 600):
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     role_cache[token_hash] = {
         "roles": roles,
@@ -81,7 +81,6 @@ async def gateway(request: Request, service: str, path: str):
         
         required_role = ROLE_REQUIREMENTS[service][0]
         
-        # Kiểm tra cache
         cached_roles = get_cached_roles(token)
         if cached_roles is not None:
             if required_role in cached_roles:
@@ -89,11 +88,11 @@ async def gateway(request: Request, service: str, path: str):
             else:
                 raise HTTPException(status_code=403, detail=f"Role required: {required_role}")
         else:
+            # Verify HMAC
             x_timestamp = request.headers.get("x-timestamp", "")
             x_nonce = request.headers.get("x-nonce", "")
             x_signature = request.headers.get("x-signature", "")
             
-            # Verify HMAC
             method = request.method
             full_path = f"/api/{service}/{path}"
             body = await request.body()
@@ -107,8 +106,11 @@ async def gateway(request: Request, service: str, path: str):
             # Gọi Auth Service
             async with httpx.AsyncClient() as client:
                 try:
+                    auth_url = f"{SERVICE_MAP['auth']}/auth/verify"
+                    print(f"🔗 Calling Auth Service: {auth_url}")
+                    
                     verify_response = await client.post(
-                        f"{SERVICE_MAP['auth']}/auth/verify",
+                        auth_url,
                         headers={
                             "Authorization": authorization,
                             "Content-Type": "application/json"
@@ -116,15 +118,27 @@ async def gateway(request: Request, service: str, path: str):
                         timeout=5.0
                     )
                     
+                    print(f"📡 Auth Service response status: {verify_response.status_code}")
+                    
+                    if verify_response.status_code == 429:
+                        print("⏳ Rate limited, waiting 3s...")
+                        await asyncio.sleep(3)
+                        verify_response = await client.post(
+                            auth_url,
+                            headers={
+                                "Authorization": authorization,
+                                "Content-Type": "application/json"
+                            },
+                            timeout=5.0
+                        )
+                    
                     if verify_response.status_code != 200:
                         error_detail = verify_response.text if verify_response.text else "Authentication failed"
-                        raise HTTPException(status_code=verify_response.status_code, detail=error_detail)
+                        raise HTTPException(status_code=verify_response.status_code, detail=error_detail[:200])
                     
                     verify_data = verify_response.json()
                     roles = verify_data.get("roles", [])
-                    
-                    # Cache roles
-                    set_cached_roles(token, roles, ttl=300)
+                    set_cached_roles(token, roles, ttl=600)
                     
                     if required_role not in roles:
                         raise HTTPException(status_code=403, detail=f"Role required: {required_role}")
