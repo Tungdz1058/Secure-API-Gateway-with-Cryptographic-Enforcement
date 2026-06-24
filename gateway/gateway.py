@@ -32,6 +32,7 @@ SERVICE_MAP = {
     "admin": "https://bank-admin-ou0n.onrender.com"
 }
 
+# ========== ROLE REQUIREMENTS ==========
 ROLE_REQUIREMENTS = {
     "admin": ["admin"],
     "transfer": ["user", "admin"],
@@ -79,14 +80,18 @@ async def gateway(request: Request, service: str, path: str):
         if not token:
             raise HTTPException(status_code=401, detail="Invalid Authorization header")
         
-        required_role = ROLE_REQUIREMENTS[service][0]
+        required_roles = ROLE_REQUIREMENTS[service]
+        print(f"🔍 Required roles for {service}: {required_roles}")
         
+        # Kiểm tra cache
         cached_roles = get_cached_roles(token)
         if cached_roles is not None:
-            if required_role in cached_roles:
-                print(f"✅ Cache hit: token has role {required_role}")
+            print(f"🔍 Cached roles: {cached_roles}")
+            if any(role in cached_roles for role in required_roles):
+                print(f"✅ Cache hit: token has one of {required_roles}")
             else:
-                raise HTTPException(status_code=403, detail=f"Role required: {required_role}")
+                print(f"❌ Cache miss: token roles {cached_roles} not in {required_roles}")
+                raise HTTPException(status_code=403, detail=f"Role required: {required_roles}")
         else:
             # Verify HMAC
             x_timestamp = request.headers.get("x-timestamp", "")
@@ -118,8 +123,6 @@ async def gateway(request: Request, service: str, path: str):
                         timeout=5.0
                     )
                     
-                    print(f"📡 Auth Service response status: {verify_response.status_code}")
-                    
                     if verify_response.status_code == 429:
                         print("⏳ Rate limited, waiting 3s...")
                         await asyncio.sleep(3)
@@ -138,10 +141,14 @@ async def gateway(request: Request, service: str, path: str):
                     
                     verify_data = verify_response.json()
                     roles = verify_data.get("roles", [])
+                    print(f"🔍 Roles from Auth Service: {roles}")
+                    
+                    # Cache roles
                     set_cached_roles(token, roles, ttl=600)
                     
-                    if required_role not in roles:
-                        raise HTTPException(status_code=403, detail=f"Role required: {required_role}")
+                    if not any(role in roles for role in required_roles):
+                        print(f"❌ Auth Service: roles {roles} not in {required_roles}")
+                        raise HTTPException(status_code=403, detail=f"Role required: {required_roles}")
                     
                 except httpx.ConnectError:
                     raise HTTPException(status_code=503, detail="Auth Service unavailable")
