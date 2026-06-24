@@ -187,7 +187,11 @@ async def verify_endpoint(
 
         body_bytes = await request.body()
         body_str = body_bytes.decode() if body_bytes else ""
-        canonical = f"{request.method}|{request.url.path}|{x_timestamp}|{x_nonce}|{body_str}"
+        
+        # ✅ Dùng path gốc từ header (Gateway gửi)
+        original_path = request.headers.get("x-original-path", request.url.path)
+        canonical = f"{request.method}|{original_path}|{x_timestamp}|{x_nonce}|{body_str}"
+        
         hmac_secret = get_hmac_secret()
         expected = hmac.new(hmac_secret, canonical.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, x_signature):
