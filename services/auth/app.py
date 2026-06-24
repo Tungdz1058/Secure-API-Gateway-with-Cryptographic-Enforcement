@@ -166,8 +166,13 @@ async def verify_endpoint(
         raise e
 
     # ===== 2. HMAC VERIFICATION =====
-    hmac_verified = False
-    if x_timestamp and x_nonce and x_signature:
+        hmac_verified = False
+        
+        # ✅ Kiểm tra HMAC headers
+        if not x_timestamp or not x_nonce or not x_signature:
+            raise HTTPException(status_code=401, detail="Missing HMAC headers")
+        
+        # ✅ Verify timestamp
         try:
             ts = int(x_timestamp)
             now = int(datetime.now(timezone.utc).timestamp())
@@ -175,7 +180,8 @@ async def verify_endpoint(
                 raise HTTPException(status_code=401, detail="Timestamp expired")
         except ValueError:
             raise HTTPException(status_code=401, detail="Invalid timestamp")
-
+        
+        # ✅ Verify nonce
         if USE_REDIS:
             if redis_client.get(x_nonce):
                 raise HTTPException(status_code=401, detail="Nonce already used")
@@ -184,11 +190,11 @@ async def verify_endpoint(
             if x_nonce in nonce_store:
                 raise HTTPException(status_code=401, detail="Nonce already used")
             nonce_store[x_nonce] = True
-
+        
+        # ✅ Tính HMAC
         body_bytes = await request.body()
         body_str = body_bytes.decode() if body_bytes else ""
         
-        # ✅ Lấy method và path từ Gateway
         original_method = request.headers.get("x-original-method", request.method)
         original_path = request.headers.get("x-original-path", request.url.path)
         
@@ -205,6 +211,7 @@ async def verify_endpoint(
         if not hmac.compare_digest(expected, x_signature):
             print(f"❌ Received: {x_signature}")
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
+        
         hmac_verified = True
 
     # ===== 3. ROLE VERIFICATION =====
