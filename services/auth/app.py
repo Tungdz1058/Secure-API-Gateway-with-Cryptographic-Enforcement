@@ -1,16 +1,15 @@
 import os
 import time
 import hashlib
-import uuid
 from datetime import datetime, timezone
-from typing import Optional, Tuple
+from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import jwt
 import hmac
-import requests
+import redis
 from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
 
 print("=== AUTH SERVICE INITIALIZING ===")
@@ -24,7 +23,6 @@ redis_client = None
 
 if REDIS_URL:
     try:
-        import redis
         redis_client = redis.from_url(REDIS_URL, decode_responses=True)
         redis_client.ping()
         USE_REDIS = True
@@ -154,14 +152,6 @@ def verify_jwt(token: str, check_session: bool = True) -> dict:
 
     return payload
 
-def verify_admin(token: str) -> bool:
-    try:
-        payload = verify_jwt(token)
-        roles = payload.get("https://api-gateway-demo.com/roles", [])
-        return "admin" in roles
-    except:
-        return False
-
 # ========== API ENDPOINTS ==========
 @app.api_route("/auth/verify", methods=["GET", "POST", "PUT", "DELETE"])
 async def verify_endpoint(
@@ -207,22 +197,13 @@ async def verify_endpoint(
             nonce_store[x_nonce] = True
 
         body_bytes = await request.body()
-        body_str = body_bytes.decode()
+        body_str = body_bytes.decode() if body_bytes else ""
         canonical = f"{request.method}|{request.url.path}|{x_timestamp}|{x_nonce}|{body_str}"
         hmac_secret = get_hmac_secret()
         expected = hmac.new(hmac_secret, canonical.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, x_signature):
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
         hmac_verified = True
-        
-    # ===== KIỂM TRA ROLE =====
-    if x_required_role:
-        roles = jwt_payload.get("https://api-gateway-demo.com/roles", [])
-        if x_required_role not in roles:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Role required: {x_required_role}"
-            )
 
     # 3. Kiểm tra role nếu có yêu cầu
     if x_required_role:
