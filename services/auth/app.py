@@ -151,6 +151,7 @@ async def verify_endpoint(
     x_signature: str = Header(None),
     x_required_role: str = Header(None),
 ):
+    hmac_verified = False
     # ===== 1. JWT VERIFICATION =====
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Authorization header")
