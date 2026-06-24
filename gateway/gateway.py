@@ -117,6 +117,7 @@ async def gateway(request: Request, service: str, path: str):
     
     logger.info(f"📨 Request: {request.method} /api/{service}/{path} from {request.client.host}")
     
+    # ===== KIỂM TRA ROLE =====
     if service in ROLE_REQUIREMENTS:
         authorization = request.headers.get("authorization")
         if not authorization:
@@ -129,6 +130,7 @@ async def gateway(request: Request, service: str, path: str):
         required_roles = ROLE_REQUIREMENTS[service]
         logger.info(f"🔍 Required roles for {service}: {required_roles}")
         
+        # 1. Kiểm tra cache
         cached_roles = get_cached_roles(token)
         if cached_roles is not None:
             if any(role in cached_roles for role in required_roles):
@@ -137,6 +139,7 @@ async def gateway(request: Request, service: str, path: str):
                 logger.warning(f"❌ Cache: token roles {cached_roles} not in {required_roles}")
                 raise HTTPException(status_code=403, detail=f"Role required: {required_roles}")
         else:
+            # 2. Verify HMAC
             x_timestamp = request.headers.get("x-timestamp", "")
             x_nonce = request.headers.get("x-nonce", "")
             x_signature = request.headers.get("x-signature", "")
@@ -155,6 +158,7 @@ async def gateway(request: Request, service: str, path: str):
                 logger.warning(f"❌ Invalid HMAC signature for {full_path}")
                 raise HTTPException(status_code=401, detail="Invalid HMAC signature")
             
+            # 3. Gọi Auth Service
             auth_url = f"{SERVICE_MAP['auth']}/auth/verify"
             verify_response = await call_auth_service_with_retry(
                 auth_url,
@@ -187,6 +191,7 @@ async def gateway(request: Request, service: str, path: str):
                 logger.error(f"❌ Auth Service response error: {str(e)}")
                 raise HTTPException(status_code=502, detail="Auth Service returned invalid response")
     
+    # ===== FORWARD REQUEST =====
     if service in PREFIX_SERVICES:
         forward_path = f"{service}/{path}"
     else:
@@ -206,12 +211,20 @@ async def gateway(request: Request, service: str, path: str):
                 timeout=10.0
             )
             
+            # Log response để debug
+            logger.info(f"📥 Response from {service}: status={response.status_code}")
+            logger.info(f"📥 Content-Type: {response.headers.get('content-type', 'unknown')}")
+            
             content_type = response.headers.get("content-type", "")
             if "application/json" in content_type:
-                logger.info(f"✅ Response from {service}: {response.status_code}")
-                return response.json()
+                try:
+                    return response.json()
+                except Exception as e:
+                    logger.error(f"❌ JSON parse error: {e}")
+                    logger.error(f"📥 Response body: {response.text[:200]}")
+                    return {"error": "Invalid JSON from service", "status": response.status_code}
             else:
-                logger.warning(f"⚠️ Non-JSON response from {service}: {response.status_code}")
+                logger.warning(f"⚠️ Non-JSON response from {service}: {response.text[:100]}")
                 return {"error": "Service returned non-JSON response", "status": response.status_code}
                 
         except httpx.ConnectError:
