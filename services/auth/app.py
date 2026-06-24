@@ -188,11 +188,14 @@ async def verify_endpoint(
         body_bytes = await request.body()
         body_str = body_bytes.decode() if body_bytes else ""
         
-        # ✅ Dùng path gốc từ header (Gateway gửi)
+        # ✅ Lấy method và path từ Gateway
+        original_method = request.headers.get("x-original-method", request.method)
         original_path = request.headers.get("x-original-path", request.url.path)
+        
+        print(f"✅ Using original method: {original_method}")
         print(f"✅ Using original path: {original_path}")
         
-        canonical = f"{request.method}|{original_path}|{x_timestamp}|{x_nonce}|{body_str}"
+        canonical = f"{original_method}|{original_path}|{x_timestamp}|{x_nonce}|{body_str}"
         print(f"🔑 Canonical: {canonical}")
         
         hmac_secret = get_hmac_secret()
