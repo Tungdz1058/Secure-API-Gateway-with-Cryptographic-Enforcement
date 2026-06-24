@@ -2,6 +2,8 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 import os
+import hmac
+import hashlib
 
 app = FastAPI(title="API Gateway")
 
@@ -16,6 +18,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ========== CONFIG ==========
+HMAC_SECRET = os.environ.get("HMAC_SECRET", "my-secret-key-change-in-production").encode()
 
 # ========== SERVICE MAP ==========
 SERVICE_MAP = {
@@ -43,7 +48,7 @@ async def gateway(request: Request, service: str, path: str):
     if not service_url:
         raise HTTPException(status_code=404, detail=f"Service {service} not found")
     
-    # ===== KIỂM TRA ROLE QUA AUTH SERVICE =====
+    # ===== KIỂM TRA ROLE =====
     if service in ROLE_REQUIREMENTS:
         authorization = request.headers.get("authorization")
         if not authorization:
@@ -54,17 +59,26 @@ async def gateway(request: Request, service: str, path: str):
         x_signature = request.headers.get("x-signature", "")
         required_role = ROLE_REQUIREMENTS[service][0]
         
+        # Verify HMAC tại Gateway
+        method = request.method
+        full_path = f"/api/{service}/{path}"
+        body = await request.body()
+        body_str = body.decode() if body else ""
+        canonical = f"{method}|{full_path}|{x_timestamp}|{x_nonce}|{body_str}"
+        expected = hmac.new(HMAC_SECRET, canonical.encode(), hashlib.sha256).hexdigest()
+        
+        if not hmac.compare_digest(expected, x_signature):
+            raise HTTPException(status_code=401, detail="Invalid HMAC signature")
+        
+        # Gọi Auth Service để verify role
         async with httpx.AsyncClient() as client:
             try:
                 verify_response = await client.post(
                     f"{SERVICE_MAP['auth']}/auth/verify",
                     headers={
                         "Authorization": authorization,
-                        "X-Timestamp": x_timestamp,
-                        "X-Nonce": x_nonce,
-                        "X-Signature": x_signature,
-                        "X-Required-Role": required_role,
-                        "Content-Type": "application/json"
+                        "Content-Type": "application/json",
+                        "X-Required-Role": required_role
                     }
                 )
                 
@@ -83,7 +97,6 @@ async def gateway(request: Request, service: str, path: str):
     else:
         forward_path = path
     
-    # Forward tất cả header (bao gồm HMAC)
     headers = dict(request.headers)
     headers.pop("host", None)
     
