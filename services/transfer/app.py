@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException, Header
 import uvicorn
-import os
 import uuid
 from datetime import datetime
 import sys
@@ -17,18 +16,16 @@ accounts = {
 
 transactions = []
 
-@app.get("/")
-async def root():
-    return {"message": "Transfer Service is running", "service": "transfer"}
-
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "transfer"}
 
 @app.post("/transfer")
-async def transfer_money(request: TransferRequest, authorization: str = Header(None)):
-    if not x_timestamp or not x_nonce or not x_signature:
-        raise HTTPException(status_code=401, detail="Missing HMAC headers")
+async def transfer_money(
+    request: TransferRequest,
+    authorization: str = Header(None)
+):
+    # ✅ Không kiểm tra HMAC ở đây, Gateway đã làm
     if request.from_account not in accounts:
         raise HTTPException(status_code=404, detail="Source account not found")
     if request.to_account not in accounts:
@@ -67,7 +64,10 @@ async def transfer_money(request: TransferRequest, authorization: str = Header(N
     )
 
 @app.post("/withdraw")
-async def withdraw_money(request: WithdrawRequest, authorization: str = Header(None)):
+async def withdraw_money(
+    request: WithdrawRequest,
+    authorization: str = Header(None)
+):
     if request.account_id not in accounts:
         raise HTTPException(status_code=404, detail="Account not found")
     
