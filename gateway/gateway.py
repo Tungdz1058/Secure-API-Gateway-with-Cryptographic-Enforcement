@@ -34,12 +34,12 @@ async def gateway(request: Request, service: str, path: str):
     if not service_url:
         raise HTTPException(status_code=404, detail=f"Service {service} not found")
     
-    # Forward request - chỉ forward path, KHÔNG thêm service prefix
+    # Forward request - giữ nguyên path gốc (bao gồm service prefix)
     async with httpx.AsyncClient() as client:
         try:
             response = await client.request(
                 method=request.method,
-                url=f"{service_url}/{path}",  
+                url=f"{service_url}/{service}/{path}",  # ✅ Forward đúng path
                 headers={k: v for k, v in request.headers.items() if k != "host"},
                 content=await request.body()
             )
