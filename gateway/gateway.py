@@ -128,6 +128,8 @@ async def gateway(request: Request, service: str, path: str):
                 "X-Original-Path": f"/api/{service}/{path}"  # ✅ Path gốc
             }
             
+            logger.info(f"🔑 Sending original path: /api/{service}/{path}")
+            
             auth_url = f"{SERVICE_MAP['auth']}/auth/verify"
             verify_response = await call_auth_service_with_retry(auth_url, auth_headers)
             
