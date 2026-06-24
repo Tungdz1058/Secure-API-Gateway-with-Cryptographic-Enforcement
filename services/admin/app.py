@@ -63,6 +63,12 @@ async def system_stats(authorization: str = Header(None)):
         "system_status": "operational",
         "uptime": "99.95%"
     }
+@app.get("/")
+async def root():
+    return {"message": "Service is running", "service": "admin"}  # Thay "transfer" bằng tên service tương ứng
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "admin"}  # Thay "transfer" bằng tên service tương ứng
 
 @app.get("/health")
 async def health():
