@@ -214,6 +214,15 @@ async def verify_endpoint(
         if not hmac.compare_digest(expected, x_signature):
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
         hmac_verified = True
+        
+    # ===== KIỂM TRA ROLE =====
+    if x_required_role:
+        roles = jwt_payload.get("https://api-gateway-demo.com/roles", [])
+        if x_required_role not in roles:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Role required: {x_required_role}"
+            )
 
     # 3. Kiểm tra role nếu có yêu cầu
     if x_required_role:
