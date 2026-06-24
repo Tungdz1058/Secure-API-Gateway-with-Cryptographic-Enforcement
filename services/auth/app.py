@@ -190,11 +190,17 @@ async def verify_endpoint(
         
         # ✅ Dùng path gốc từ header (Gateway gửi)
         original_path = request.headers.get("x-original-path", request.url.path)
+        print(f"✅ Using original path: {original_path}")
+        
         canonical = f"{request.method}|{original_path}|{x_timestamp}|{x_nonce}|{body_str}"
+        print(f"🔑 Canonical: {canonical}")
         
         hmac_secret = get_hmac_secret()
         expected = hmac.new(hmac_secret, canonical.encode(), hashlib.sha256).hexdigest()
+        print(f"🔑 Expected: {expected}")
+        
         if not hmac.compare_digest(expected, x_signature):
+            print(f"❌ Received: {x_signature}")
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
         hmac_verified = True
 
