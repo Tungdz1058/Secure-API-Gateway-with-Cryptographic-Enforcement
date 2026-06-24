@@ -59,11 +59,10 @@ SERVICE_MAP = {
     "admin": os.environ.get("ADMIN_SERVICE_URL", "https://bank-admin.onrender.com")
 }
 
-# ========== ROLE REQUIREMENTS ==========
 ROLE_REQUIREMENTS = {
-    "transfer": ["user", "admin"],      # User và admin đều được chuyển tiền
-    "account": ["user", "admin"],       # User và admin đều xem số dư
-    "admin": ["admin"]                  # Chỉ admin mới vào admin panel
+    "transfer": ["user", "admin"],
+    "account": ["user", "admin"],
+    "admin": ["admin"]
 }
 
 print("Service Map:", SERVICE_MAP)
@@ -110,13 +109,6 @@ def check_replay(nonce: str) -> bool:
         nonce_store[nonce] = True
     return True
 
-def verify_hmac(request: Request, timestamp: str, nonce: str, signature: str) -> bool:
-    body = request.body()
-    body_str = body.decode() if body else ""
-    canonical = f"{request.method}|{request.url.path}|{timestamp}|{nonce}|{body_str}"
-    expected = hmac.new(HMAC_SECRET, canonical.encode(), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
-
 def check_role(token: str, allowed_roles: list) -> bool:
     try:
         payload = verify_jwt(token)
@@ -124,6 +116,14 @@ def check_role(token: str, allowed_roles: list) -> bool:
         return any(r in allowed_roles for r in roles)
     except:
         return False
+
+# ========== HMAC VERIFICATION ==========
+async def verify_hmac(request: Request, timestamp: str, nonce: str, signature: str) -> bool:
+    body = await request.body()
+    body_str = body.decode() if body else ""
+    canonical = f"{request.method}|{request.url.path}|{timestamp}|{nonce}|{body_str}"
+    expected = hmac.new(HMAC_SECRET, canonical.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
 
 # ========== GATEWAY ROUTE ==========
 @app.get("/")
@@ -197,7 +197,7 @@ async def gateway(
         raise HTTPException(status_code=401, detail="Nonce already used")
     
     # HMAC
-    if not verify_hmac(request, x_timestamp, x_nonce, x_signature):
+    if not await verify_hmac(request, x_timestamp, x_nonce, x_signature):
         raise HTTPException(status_code=401, detail="Invalid HMAC signature")
     
     # ===== LỚP 4: Route =====
