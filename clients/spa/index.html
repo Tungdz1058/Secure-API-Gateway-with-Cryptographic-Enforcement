@@ -92,6 +92,7 @@
         .status-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
         .status-error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
         .status-pending { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+        .result-box { margin-top: 15px; }
         @media (max-width: 768px) {
             .header { flex-direction: column; text-align: center; }
             .header-right { text-align: center; width: 100%; }
@@ -107,53 +108,58 @@
 <div class="container">
     <div class="header">
         <div>
-            <h1>Ngan Hang So</h1>
+            <h1>🏦 Ngân Hàng Số</h1>
             <div class="subtitle">Secure API Gateway · Cryptographic Enforcement</div>
         </div>
         <div class="header-right">
-            <strong>Nhom thuc hien</strong><br>
-            Le Dinh Tung - 24162140<br>
-            Tran Ngo Anh Tu - 24152141<br>
-            Cao Nhut Thanh - 24162118
+            <strong>Nhóm thực hiện</strong><br>
+            Lê Đình Tùng - 24162140<br>
+            Trần Ngô Anh Tú - 24152141<br>
+            Cao Nhứt Thạnh - 24162118
         </div>
     </div>
 
     <div class="content">
         <!-- Buttons -->
         <div class="button-group">
-            <button id="loginBtn" class="btn-primary">Dang nhap</button>
-            <button id="balanceBtn" class="btn-success" disabled>Xem so du</button>
-            <button id="transferBtn" class="btn-warning" disabled>Chuyen tien</button>
-            <button id="withdrawBtn" class="btn-info" disabled>Rut tien</button>
-            <button id="adminBtn" class="btn-danger" disabled>Admin Panel</button>
-            <button id="logoutBtn" class="btn-danger" disabled>Dang xuat</button>
+            <button id="loginBtn" class="btn-primary">🔑 Đăng nhập</button>
+            <button id="balanceBtn" class="btn-success" disabled>💰 Xem số dư</button>
+            <button id="transferBtn" class="btn-warning" disabled>💸 Chuyển tiền</button>
+            <button id="withdrawBtn" class="btn-info" disabled>🏧 Rút tiền</button>
+            <button id="adminBtn" class="btn-danger" disabled>⚙️ Admin</button>
+            <button id="logoutBtn" class="btn-danger" disabled>🚪 Đăng xuất</button>
         </div>
 
-        <!-- Balance -->
-        <div id="balanceCard" class="card hidden">
-            <h3>So du tai khoan</h3>
-            <div id="balanceDisplay">
-                <span class="balance">0</span>
-                <span class="balance-currency"> VND</span>
-            </div>
-            <div style="margin-top:10px;font-size:13px;color:#666;">
-                <span id="accountIdDisplay">Tai khoan: ACC001</span>
+        <!-- User Info -->
+        <div id="userInfo" class="card hidden">
+            <h3>👤 Thông tin người dùng</h3>
+            <div class="info-row"><span class="info-label">User ID:</span><span class="info-value" id="userId"></span></div>
+            <div class="info-row"><span class="info-label">Email:</span><span class="info-value" id="userEmail"></span></div>
+            <div class="info-row"><span class="info-label">Role:</span><span class="info-value" id="userRole"></span></div>
+            <div class="info-row"><span class="info-label">HMAC Status:</span><span class="info-value" id="hmacStatus"><span class="badge badge-warning">Chưa gửi</span></span></div>
+        </div>
+
+        <!-- Result Area - hiển thị kết quả của từng chức năng -->
+        <div id="resultArea" class="card hidden">
+            <h3 id="resultTitle">📊 Kết quả</h3>
+            <div id="resultContent">
+                <div class="api-response" id="apiResponse">(ấn nút để gọi API)</div>
             </div>
         </div>
 
-        <!-- Transfer Form -->
+        <!-- Transfer Form (ẩn, hiển thị khi ấn nút chuyển tiền) -->
         <div id="transferForm" class="card hidden">
-            <h3>Chuyen tien</h3>
+            <h3>💸 Chuyển tiền</h3>
             <div class="row">
                 <div class="col">
                     <div class="form-group">
-                        <label>Tai khoan nguon</label>
+                        <label>Tài khoản nguồn</label>
                         <input type="text" id="fromAccount" value="ACC001" readonly>
                     </div>
                 </div>
                 <div class="col">
                     <div class="form-group">
-                        <label>Tai khoan dich</label>
+                        <label>Tài khoản đích</label>
                         <input type="text" id="toAccount" placeholder="VD: ACC002">
                     </div>
                 </div>
@@ -161,77 +167,62 @@
             <div class="row">
                 <div class="col">
                     <div class="form-group">
-                        <label>So tien (VND)</label>
-                        <input type="number" id="transferAmount" placeholder="Nhap so tien">
+                        <label>Số tiền (VND)</label>
+                        <input type="number" id="transferAmount" placeholder="Nhập số tiền">
                     </div>
                 </div>
                 <div class="col">
                     <div class="form-group">
-                        <label>Noi dung</label>
-                        <input type="text" id="transferDesc" placeholder="Noi dung chuyen tien">
+                        <label>Nội dung</label>
+                        <input type="text" id="transferDesc" placeholder="Nội dung chuyển tiền">
                     </div>
                 </div>
             </div>
-            <button id="doTransferBtn" class="btn-success">Xac nhan chuyen tien</button>
-            <div id="transferResult" style="margin-top:10px;"></div>
+            <button id="doTransferBtn" class="btn-success">Xác nhận chuyển tiền</button>
+            <div id="transferResult" class="result-box"></div>
         </div>
 
-        <!-- Withdraw Form -->
+        <!-- Withdraw Form (ẩn, hiển thị khi ấn nút rút tiền) -->
         <div id="withdrawForm" class="card hidden">
-            <h3>Rut tien</h3>
+            <h3>🏧 Rút tiền</h3>
             <div class="row">
                 <div class="col">
                     <div class="form-group">
-                        <label>Tai khoan</label>
+                        <label>Tài khoản</label>
                         <input type="text" id="withdrawAccount" value="ACC001" readonly>
                     </div>
                 </div>
                 <div class="col">
                     <div class="form-group">
-                        <label>So tien (VND)</label>
-                        <input type="number" id="withdrawAmount" placeholder="Nhap so tien rut">
+                        <label>Số tiền (VND)</label>
+                        <input type="number" id="withdrawAmount" placeholder="Nhập số tiền rút">
                     </div>
                 </div>
             </div>
-            <button id="doWithdrawBtn" class="btn-info">Xac nhan rut tien</button>
-            <div id="withdrawResult" style="margin-top:10px;"></div>
+            <button id="doWithdrawBtn" class="btn-info">Xác nhận rút tiền</button>
+            <div id="withdrawResult" class="result-box"></div>
         </div>
 
-        <!-- Admin Panel -->
+        <!-- Admin Panel (ẩn, hiển thị khi ấn nút admin) -->
         <div id="adminPanel" class="card admin-panel hidden">
-            <h3>Admin Panel - Quan ly nguoi dung</h3>
+            <h3>⚙️ Admin Panel - Quản lý người dùng</h3>
             <div style="margin-bottom:15px;">
-                <button id="listUsersBtn" class="btn-danger">Danh sach users</button>
-                <button id="deleteUserBtn" class="btn-danger" style="margin-left:10px;">Xoa user</button>
+                <button id="listUsersBtn" class="btn-danger">📋 Danh sách users</button>
+                <button id="deleteUserBtn" class="btn-danger" style="margin-left:10px;">🗑️ Xóa user</button>
             </div>
-            <div id="adminResult" style="margin-top:10px;"></div>
-        </div>
-
-        <!-- User Info -->
-        <div id="userInfo" class="card hidden">
-            <h3>Thong tin nguoi dung</h3>
-            <div class="info-row"><span class="info-label">User ID:</span><span class="info-value" id="userId"></span></div>
-            <div class="info-row"><span class="info-label">Email:</span><span class="info-value" id="userEmail"></span></div>
-            <div class="info-row"><span class="info-label">Role:</span><span class="info-value" id="userRole"></span></div>
-            <div class="info-row"><span class="info-label">HMAC Status:</span><span class="info-value" id="hmacStatus"><span class="badge badge-warning">Chua gui</span></span></div>
+            <div id="adminResult" class="result-box"></div>
         </div>
 
         <!-- Token Display -->
         <div class="section" style="margin-top:20px;">
-            <h3 style="color:#003366;font-size:17px;">ID Token</h3>
-            <div class="code-block" id="tokenDisplay">(chua dang nhap)</div>
-        </div>
-
-        <!-- API Response -->
-        <div class="section" style="margin-top:20px;">
-            <h3 style="color:#003366;font-size:17px;">Ket qua API</h3>
-            <div class="api-response" id="apiResponse">(an nut de goi API)</div>
+            <h3 style="color:#003366;font-size:17px;">🔐 ID Token</h3>
+            <div class="code-block" id="tokenDisplay">(chưa đăng nhập)</div>
         </div>
     </div>
 
     <div class="footer">
         <p><strong>Cryptographic Enforcement</strong> | JWT + HMAC | Nonce + Timestamp | Replay Protection</p>
-        <p>Dai hoc Su pham Ky thuat TP.HCM (HCMUTE) - Khoa Cong nghe Thong tin</p>
+        <p>Đại học Sư phạm Kỹ thuật TP.HCM (HCMUTE) - Khoa Công nghệ Thông tin</p>
     </div>
 </div>
 
@@ -317,13 +308,13 @@
         badge.className = 'badge';
         if (status === 'success') {
             badge.className += ' badge-success';
-            badge.textContent = 'OK ' + message;
+            badge.textContent = '✓ ' + message;
         } else if (status === 'pending') {
             badge.className += ' badge-warning';
-            badge.textContent = '... ' + message;
+            badge.textContent = '⏳ ' + message;
         } else if (status === 'error') {
             badge.className += ' badge-danger';
-            badge.textContent = 'X ' + message;
+            badge.textContent = '✗ ' + message;
         } else {
             badge.className += ' badge-info';
             badge.textContent = message;
@@ -333,10 +324,21 @@
         }
     }
 
-    function showStatus(elementId, message, type) {
+    function showResult(elementId, data, type) {
         const el = document.getElementById(elementId);
         if (!el) return;
-        el.innerHTML = '<div class="status-text status-' + type + '">' + message + '</div>';
+        const content = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+        el.innerHTML = '<div class="status-text status-' + type + '"><pre style="margin:0;white-space:pre-wrap;word-break:break-all;">' + content + '</pre></div>';
+    }
+
+    // ============================================================
+    // HIỂN THỊ KẾT QUẢ TRONG resultArea
+    // ============================================================
+    function showResultArea(title, content, type) {
+        document.getElementById('resultArea').style.display = 'block';
+        document.getElementById('resultTitle').innerText = title;
+        const el = document.getElementById('apiResponse');
+        el.innerHTML = '<div class="status-text status-' + type + '"><pre style="margin:0;white-space:pre-wrap;word-break:break-all;">' + content + '</pre></div>';
     }
 
     // ============================================================
@@ -351,25 +353,13 @@
             userRole = roles.includes('admin') ? 'admin' : 'user';
             document.getElementById('userRole').innerText = userRole;
             document.getElementById('userInfo').style.display = 'block';
-            document.getElementById('balanceCard').style.display = 'block';
-            document.getElementById('transferForm').style.display = 'block';
-            document.getElementById('withdrawForm').style.display = 'block';
+
             if (userRole === 'admin') {
-                document.getElementById('adminPanel').style.display = 'block';
                 document.getElementById('adminBtn').style.display = 'inline-block';
             } else {
-                document.getElementById('adminPanel').style.display = 'none';
                 document.getElementById('adminBtn').style.display = 'none';
             }
         }
-    }
-
-    function showBalance(data) {
-        const balance = data.balance || 0;
-        document.getElementById('balanceDisplay').innerHTML =
-            '<span class="balance">' + balance.toLocaleString() + '</span>' +
-            '<span class="balance-currency"> VND</span>';
-        document.getElementById('accountIdDisplay').innerText = 'Tai khoan: ' + (data.account_id || 'ACC001');
     }
 
     // ============================================================
@@ -441,6 +431,8 @@
                 });
                 const loginData = await loginResp.json();
                 console.log('Login session:', loginData);
+                
+                showResultArea('✅ Đăng nhập thành công', 'Bạn đã đăng nhập thành công. Hãy chọn chức năng bên dưới.', 'success');
             } else {
                 document.getElementById('tokenDisplay').textContent = 'Error from Auth0:\n' + JSON.stringify(data, null, 2);
             }
@@ -453,9 +445,8 @@
     // XEM SO DU
     // ============================================================
     document.getElementById('balanceBtn').onclick = async () => {
-        if (!idToken) { alert('Vui long dang nhap truoc'); return; }
-        document.getElementById('apiResponse').textContent = 'Dang goi API...';
-        updateHmacStatus('pending', 'Dang tao HMAC...');
+        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
+        showResultArea('💰 Đang lấy số dư...', 'Đang gọi API Account Service...', 'pending');
 
         const timestamp = Math.floor(Date.now() / 1000).toString();
         const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
@@ -464,7 +455,7 @@
 
         try {
             const signature = await generateHmacSignature(method, path, timestamp, nonce, '');
-            updateHmacStatus('pending', 'Da tao HMAC, dang gui...');
+            updateHmacStatus('pending', 'Đang gửi...');
 
             const resp = await fetch(GATEWAY_URL + path, {
                 method: method,
@@ -476,35 +467,45 @@
                 }
             });
             const data = await resp.json();
-            document.getElementById('apiResponse').textContent = JSON.stringify(data, null, 2);
+            
             if (data.balance !== undefined) {
-                showBalance(data);
+                const balanceHTML = 'Số dư: <span style="font-size:28px;font-weight:700;color:#003366;">' + data.balance.toLocaleString() + '</span> VND';
+                showResultArea('💰 Số dư tài khoản', balanceHTML, 'success');
                 updateHmacStatus('success', 'HMAC verified');
             } else {
-                updateHmacStatus('error', 'Khong lay duoc so du');
+                showResultArea('❌ Lỗi', JSON.stringify(data, null, 2), 'error');
+                updateHmacStatus('error', 'Không lấy được số dư');
             }
         } catch (err) {
-            document.getElementById('apiResponse').textContent = 'Error: ' + err.message;
-            updateHmacStatus('error', 'Loi: ' + err.message);
+            showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
+            updateHmacStatus('error', 'Lỗi: ' + err.message);
         }
     };
 
     // ============================================================
-    // CHUYEN TIEN
+    // CHUYỂN TIỀN - Hiển thị form
     // ============================================================
+    document.getElementById('transferBtn').onclick = () => {
+        document.getElementById('transferForm').style.display = 'block';
+        document.getElementById('withdrawForm').style.display = 'none';
+        document.getElementById('adminPanel').style.display = 'none';
+        document.getElementById('resultArea').style.display = 'none';
+        showResultArea('💸 Chuyển tiền', 'Vui lòng nhập thông tin bên dưới và ấn "Xác nhận"', 'pending');
+    };
+
     document.getElementById('doTransferBtn').onclick = async () => {
-        if (!idToken) { alert('Vui long dang nhap truoc'); return; }
+        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
         const fromAccount = document.getElementById('fromAccount').value;
         const toAccount = document.getElementById('toAccount').value;
         const amount = parseFloat(document.getElementById('transferAmount').value);
-        const description = document.getElementById('transferDesc').value || 'Chuyen tien';
+        const description = document.getElementById('transferDesc').value || 'Chuyển tiền';
 
         if (!toAccount || !amount || amount <= 0) {
-            showStatus('transferResult', 'Vui long nhap day du thong tin', 'error');
+            showResultArea('❌ Lỗi', 'Vui lòng nhập đầy đủ thông tin', 'error');
             return;
         }
 
-        showStatus('transferResult', 'Dang xu ly...', 'pending');
+        showResultArea('💸 Đang chuyển tiền...', 'Đang gọi Transfer Service...', 'pending');
         const timestamp = Math.floor(Date.now() / 1000).toString();
         const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
         const method = 'POST';
@@ -525,32 +526,41 @@
                 body: body
             });
             const data = await resp.json();
-            showStatus('transferResult', JSON.stringify(data, null, 2), 'success');
             if (data.status === 'completed') {
-                document.getElementById('apiResponse').textContent = 'Chuyen tien thanh cong!';
-                // Refresh balance
-                document.getElementById('balanceBtn').click();
+                showResultArea('✅ Chuyển tiền thành công!', JSON.stringify(data, null, 2), 'success');
+                document.getElementById('transferAmount').value = '';
+                document.getElementById('toAccount').value = '';
+            } else {
+                showResultArea('❌ Chuyển tiền thất bại', JSON.stringify(data, null, 2), 'error');
             }
         } catch (err) {
-            showStatus('transferResult', 'Loi: ' + err.message, 'error');
+            showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
         }
     };
 
     // ============================================================
-    // RUT TIEN
+    // RÚT TIỀN - Hiển thị form
     // ============================================================
+    document.getElementById('withdrawBtn').onclick = () => {
+        document.getElementById('withdrawForm').style.display = 'block';
+        document.getElementById('transferForm').style.display = 'none';
+        document.getElementById('adminPanel').style.display = 'none';
+        document.getElementById('resultArea').style.display = 'none';
+        showResultArea('🏧 Rút tiền', 'Vui lòng nhập số tiền và ấn "Xác nhận"', 'pending');
+    };
+
     document.getElementById('doWithdrawBtn').onclick = async () => {
-        if (!idToken) { alert('Vui long dang nhap truoc'); return; }
+        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
         const accountId = document.getElementById('withdrawAccount').value;
         const amount = parseFloat(document.getElementById('withdrawAmount').value);
-        const description = document.getElementById('transferDesc').value || 'Rut tien ATM';
+        const description = document.getElementById('transferDesc').value || 'Rút tiền ATM';
 
         if (!amount || amount <= 0) {
-            showStatus('withdrawResult', 'Vui long nhap so tien', 'error');
+            showResultArea('❌ Lỗi', 'Vui lòng nhập số tiền', 'error');
             return;
         }
 
-        showStatus('withdrawResult', 'Dang xu ly...', 'pending');
+        showResultArea('🏧 Đang rút tiền...', 'Đang gọi Transfer Service...', 'pending');
         const timestamp = Math.floor(Date.now() / 1000).toString();
         const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
         const method = 'POST';
@@ -571,13 +581,14 @@
                 body: body
             });
             const data = await resp.json();
-            showStatus('withdrawResult', JSON.stringify(data, null, 2), 'success');
             if (data.message === 'Withdrawal successful') {
-                document.getElementById('apiResponse').textContent = 'Rut tien thanh cong!';
-                document.getElementById('balanceBtn').click();
+                showResultArea('✅ Rút tiền thành công!', JSON.stringify(data, null, 2), 'success');
+                document.getElementById('withdrawAmount').value = '';
+            } else {
+                showResultArea('❌ Rút tiền thất bại', JSON.stringify(data, null, 2), 'error');
             }
         } catch (err) {
-            showStatus('withdrawResult', 'Loi: ' + err.message, 'error');
+            showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
         }
     };
 
@@ -585,12 +596,16 @@
     // ADMIN PANEL
     // ============================================================
     document.getElementById('adminBtn').onclick = () => {
-        document.getElementById('adminPanel').style.display = document.getElementById('adminPanel').style.display === 'none' ? 'block' : 'none';
+        document.getElementById('adminPanel').style.display = 'block';
+        document.getElementById('transferForm').style.display = 'none';
+        document.getElementById('withdrawForm').style.display = 'none';
+        document.getElementById('resultArea').style.display = 'none';
+        showResultArea('⚙️ Admin Panel', 'Chọn chức năng bên dưới', 'pending');
     };
 
     document.getElementById('listUsersBtn').onclick = async () => {
-        if (!idToken) { alert('Vui long dang nhap truoc'); return; }
-        showStatus('adminResult', 'Dang tai...', 'pending');
+        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
+        showResultArea('📋 Danh sách users', 'Đang tải...', 'pending');
         const timestamp = Math.floor(Date.now() / 1000).toString();
         const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
         const method = 'GET';
@@ -608,17 +623,17 @@
                 }
             });
             const data = await resp.json();
-            showStatus('adminResult', JSON.stringify(data, null, 2), 'success');
+            showResultArea('📋 Danh sách users', JSON.stringify(data, null, 2), 'success');
         } catch (err) {
-            showStatus('adminResult', 'Loi: ' + err.message, 'error');
+            showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
         }
     };
 
     document.getElementById('deleteUserBtn').onclick = async () => {
-        if (!idToken) { alert('Vui long dang nhap truoc'); return; }
-        const userId = prompt('Nhap user ID can xoa:');
+        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
+        const userId = prompt('Nhập user ID cần xóa:');
         if (!userId) return;
-        showStatus('adminResult', 'Dang xoa user ' + userId + '...', 'pending');
+        showResultArea('🗑️ Đang xóa user ' + userId, 'Đang gọi Admin Service...', 'pending');
         const timestamp = Math.floor(Date.now() / 1000).toString();
         const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
         const method = 'DELETE';
@@ -636,9 +651,9 @@
                 }
             });
             const data = await resp.json();
-            showStatus('adminResult', JSON.stringify(data, null, 2), 'success');
+            showResultArea('🗑️ Kết quả xóa user', JSON.stringify(data, null, 2), 'success');
         } catch (err) {
-            showStatus('adminResult', 'Loi: ' + err.message, 'error');
+            showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
         }
     };
 
@@ -653,8 +668,7 @@
             });
         }
         idToken = null;
-        document.getElementById('tokenDisplay').textContent = '(da dang xuat)';
-        document.getElementById('apiResponse').textContent = '(an nut de goi API)';
+        document.getElementById('tokenDisplay').textContent = '(đã đăng xuất)';
         document.getElementById('balanceBtn').disabled = true;
         document.getElementById('transferBtn').disabled = true;
         document.getElementById('withdrawBtn').disabled = true;
@@ -662,13 +676,14 @@
         document.getElementById('logoutBtn').disabled = true;
         document.getElementById('loginBtn').disabled = false;
         document.getElementById('userInfo').style.display = 'none';
-        document.getElementById('balanceCard').style.display = 'none';
+        document.getElementById('resultArea').style.display = 'none';
         document.getElementById('transferForm').style.display = 'none';
         document.getElementById('withdrawForm').style.display = 'none';
         document.getElementById('adminPanel').style.display = 'none';
         sessionStorage.removeItem('pkce_verifier');
         savedVerifier = null;
-        updateHmacStatus('info', 'Da dang xuat');
+        updateHmacStatus('info', 'Đã đăng xuất');
+        showResultArea('🚪 Đã đăng xuất', 'Bạn đã đăng xuất thành công', 'info');
         const logoutUrl = 'https://' + AUTH0_DOMAIN + '/v2/logout?returnTo=' + encodeURIComponent(REDIRECT_URI) + '&federated';
         window.location.href = logoutUrl;
     };
@@ -681,8 +696,7 @@
     } else {
         sessionStorage.removeItem('pkce_verifier');
         savedVerifier = null;
-        document.getElementById('tokenDisplay').textContent = '(chua dang nhap)';
-        document.getElementById('apiResponse').textContent = '(an nut de goi API)';
+        document.getElementById('tokenDisplay').textContent = '(chưa đăng nhập)';
         document.getElementById('balanceBtn').disabled = true;
         document.getElementById('transferBtn').disabled = true;
         document.getElementById('withdrawBtn').disabled = true;
@@ -690,11 +704,11 @@
         document.getElementById('logoutBtn').disabled = true;
         document.getElementById('loginBtn').disabled = false;
         document.getElementById('userInfo').style.display = 'none';
-        document.getElementById('balanceCard').style.display = 'none';
+        document.getElementById('resultArea').style.display = 'none';
         document.getElementById('transferForm').style.display = 'none';
         document.getElementById('withdrawForm').style.display = 'none';
         document.getElementById('adminPanel').style.display = 'none';
-        updateHmacStatus('info', 'Chua dang nhap');
+        updateHmacStatus('info', 'Chưa đăng nhập');
     }
 </script>
 </body>
