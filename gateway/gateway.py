@@ -123,8 +123,8 @@ async def gateway(request: Request, service: str, path: str):
             x_signature = request.headers.get("x-signature", "")
 
             if service in ROLE_REQUIREMENTS:
-            if not x_timestamp or not x_nonce or not x_signature:
-                raise HTTPException(status_code=401, detail="Missing HMAC headers")
+                if not x_timestamp or not x_nonce or not x_signature:
+                    raise HTTPException(status_code=401, detail="Missing HMAC headers")
             
             body_bytes = await request.body()
             body_str = body_bytes.decode() if body_bytes else ""
