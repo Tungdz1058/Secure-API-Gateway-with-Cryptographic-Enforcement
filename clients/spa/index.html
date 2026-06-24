@@ -272,6 +272,7 @@
 
     async function generateHmacSignature(method, path, timestamp, nonce, body) {
         const canonical = method + '|' + path + '|' + timestamp + '|' + nonce + '|' + body;
+        console.log('🔑 Canonical:', canonical);
         const encoder = new TextEncoder();
         const data = encoder.encode(canonical);
         const key = await crypto.subtle.importKey(
@@ -376,11 +377,18 @@
                 document.getElementById('tokenDisplay').textContent = JSON.stringify(data, null, 2);
 
                 // Gọi Auth Service qua Gateway để verify
+                const timestamp = Math.floor(Date.now() / 1000).toString();
+                const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+                const signature = await generateHmacSignature('POST', '/api/auth/verify', timestamp, nonce, '');
+
                 const verifyResp = await fetch(GATEWAY_URL + '/api/auth/verify', {
                     method: 'POST',
                     headers: {
                         'Authorization': 'Bearer ' + idToken,
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
+                        'X-Timestamp': timestamp,
+                        'X-Nonce': nonce,
+                        'X-Signature': signature
                     }
                 });
                 const verifyData = await verifyResp.json();
@@ -554,53 +562,69 @@
     };
 
     // ============================================================
-    // ADMIN PANEL - GỌI AUTH SERVICE QUA GATEWAY
+    // ADMIN PANEL
     // ============================================================
     document.getElementById('adminBtn').onclick = async () => {
-    if (!idToken) { 
-        alert('Vui lòng đăng nhập trước'); 
-        return; 
-    }
-    
-    showResultArea('⚙️ Admin Panel', 'Đang kiểm tra quyền truy cập qua Auth Service...', 'pending');
-    
-    try {
-        const verifyResp = await fetch(GATEWAY_URL + '/api/auth/verify', {
-            method: 'POST',
-            headers: {
-                'Authorization': 'Bearer ' + idToken,
-                'Content-Type': 'application/json',
-                'X-Required-Role': 'admin'
+        if (!idToken) { 
+            alert('Vui lòng đăng nhập trước'); 
+            return; 
+        }
+        
+        showResultArea('⚙️ Admin Panel', 'Đang kiểm tra quyền truy cập qua Auth Service...', 'pending');
+        
+        const timestamp = Math.floor(Date.now() / 1000).toString();
+        const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+        const method = 'POST';
+        const path = '/api/auth/verify';
+        const body = '';
+        
+        try {
+            const signature = await generateHmacSignature(method, path, timestamp, nonce, body);
+            updateHmacStatus('pending', 'Đang gửi HMAC...');
+            
+            const verifyResp = await fetch(GATEWAY_URL + path, {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + idToken,
+                    'Content-Type': 'application/json',
+                    'X-Timestamp': timestamp,
+                    'X-Nonce': nonce,
+                    'X-Signature': signature,
+                    'X-Required-Role': 'admin'
+                }
+            });
+            
+            if (verifyResp.status === 403) {
+                const data = await verifyResp.json();
+                showResultArea('⛔ Truy cập bị từ chối', data.detail || 'Bạn không có quyền truy cập Admin Panel. Yêu cầu role: admin', 'error');
+                document.getElementById('adminPanel').style.display = 'none';
+                updateHmacStatus('error', 'Không có quyền admin');
+                return;
             }
-        });
-        
-        if (verifyResp.status === 403) {
-            const data = await verifyResp.json();
-            showResultArea('⛔ Truy cập bị từ chối', data.detail || 'Bạn không có quyền truy cập Admin Panel', 'error');
-            document.getElementById('adminPanel').style.display = 'none';
-            return;
+            
+            if (verifyResp.status === 401) {
+                showResultArea('⛔ Phiên đăng nhập không hợp lệ', 'Vui lòng đăng nhập lại', 'error');
+                updateHmacStatus('error', 'Phiên không hợp lệ');
+                return;
+            }
+            
+            if (verifyResp.status === 200) {
+                const verifyData = await verifyResp.json();
+                document.getElementById('adminPanel').style.display = 'block';
+                document.getElementById('transferForm').style.display = 'none';
+                document.getElementById('withdrawForm').style.display = 'none';
+                document.getElementById('resultArea').style.display = 'none';
+                showResultArea('⚙️ Admin Panel', 'Xác thực role admin thành công', 'success');
+                updateHmacStatus('success', 'HMAC verified');
+                document.getElementById('listUsersBtn').click();
+            } else {
+                showResultArea('❌ Lỗi', 'Status: ' + verifyResp.status, 'error');
+            }
+        } catch (err) {
+            showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
+            updateHmacStatus('error', 'Lỗi: ' + err.message);
         }
-        
-        if (verifyResp.status === 401) {
-            showResultArea('⛔ Phiên đăng nhập không hợp lệ', 'Vui lòng đăng nhập lại', 'error');
-            return;
-        }
-        
-        if (verifyResp.status === 200) {
-            const verifyData = await verifyResp.json();
-            document.getElementById('adminPanel').style.display = 'block';
-            document.getElementById('transferForm').style.display = 'none';
-            document.getElementById('withdrawForm').style.display = 'none';
-            document.getElementById('resultArea').style.display = 'none';
-            showResultArea('⚙️ Admin Panel', 'Xác thực role admin thành công', 'success');
-            document.getElementById('listUsersBtn').click();
-        } else {
-            showResultArea('❌ Lỗi', 'Status: ' + verifyResp.status, 'error');
-        }
-    } catch (err) {
-        showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
-    }
-};
+    };
 
     document.getElementById('listUsersBtn').onclick = async () => {
         if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
