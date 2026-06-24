@@ -169,11 +169,13 @@ async def verify_endpoint(
         raise e
 
     # ===== 2. HMAC VERIFICATION =====
-    # ✅ BẮT BUỘC HMAC HEADERS
+    hmac_verified = False
+    
+    # ✅ Kiểm tra HMAC headers
     if not x_timestamp or not x_nonce or not x_signature:
         raise HTTPException(status_code=401, detail="Missing HMAC headers")
-
-    # ✅ TIMESTAMP
+    
+    # ✅ Verify timestamp
     try:
         ts = int(x_timestamp)
         now = int(datetime.now(timezone.utc).timestamp())
@@ -181,8 +183,8 @@ async def verify_endpoint(
             raise HTTPException(status_code=401, detail="Timestamp expired")
     except ValueError:
         raise HTTPException(status_code=401, detail="Invalid timestamp")
-
-    # ✅ NONCE
+    
+    # ✅ Verify nonce
     if USE_REDIS:
         if redis_client.get(x_nonce):
             raise HTTPException(status_code=401, detail="Nonce already used")
@@ -191,23 +193,33 @@ async def verify_endpoint(
         if x_nonce in nonce_store:
             raise HTTPException(status_code=401, detail="Nonce already used")
         nonce_store[x_nonce] = True
-
-    # ✅ HMAC
+    
+    # ✅ Tính HMAC
     body_bytes = await request.body()
     body_str = body_bytes.decode() if body_bytes else ""
-
+    
     original_method = request.headers.get("x-original-method", request.method)
     original_path = request.headers.get("x-original-path", request.url.path)
-
+    
+    print(f"✅ Using original method: {original_method}")
+    print(f"✅ Using original path: {original_path}")
+    
     canonical = f"{original_method}|{original_path}|{x_timestamp}|{x_nonce}|{body_str}"
-
+    print(f"🔑 Canonical: {canonical}")
+    
     hmac_secret = get_hmac_secret()
     expected = hmac.new(hmac_secret, canonical.encode(), hashlib.sha256).hexdigest()
-
+    print(f"🔑 Expected: {expected}")
+    print(f"🔑 Received: {x_signature}")
+    
+    # ✅ QUAN TRỌNG: PHẢI KIỂM TRA VÀ RAISE EXCEPTION
     if not hmac.compare_digest(expected, x_signature):
+        print(f"❌ HMAC MISMATCH! Rejecting request")
         raise HTTPException(status_code=401, detail="Invalid HMAC signature")
-
+    
+    # ✅ Nếu đến được đây, HMAC đúng
     hmac_verified = True
+    print(f"✅ HMAC verified successfully")
 
     # ===== 3. ROLE VERIFICATION =====
     if x_required_role:
