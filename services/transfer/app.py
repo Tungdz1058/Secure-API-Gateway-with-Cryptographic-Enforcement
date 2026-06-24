@@ -27,6 +27,8 @@ async def health():
 
 @app.post("/transfer")
 async def transfer_money(request: TransferRequest, authorization: str = Header(None)):
+    if not x_timestamp or not x_nonce or not x_signature:
+        raise HTTPException(status_code=401, detail="Missing HMAC headers")
     if request.from_account not in accounts:
         raise HTTPException(status_code=404, detail="Source account not found")
     if request.to_account not in accounts:
