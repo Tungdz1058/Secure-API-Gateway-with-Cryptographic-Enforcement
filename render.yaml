@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: bank-gateway
+    runtime: python
+    repo: https://github.com/Tungdz1058/Secure-API-Gateway-with-Cryptographic-Enforcement
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd gateway && uvicorn gateway:app --host 0.0.0.0 --port 5000
+    envVars:
+      - key: AUTH0_DOMAIN
+        value: apigatewaysecure.us.auth0.com
+      - key: AUTH0_CLIENT_ID
+        value: 5GkSY8Xk4oNRpJysIWx35UCyeInC0Vs3
+      - key: HMAC_SECRET
+        value: my-secret-key-change-in-production
+      - key: REDIS_URL
+        value: redis://default:password@xxx.upstash.io:port
+      - key: TRANSFER_SERVICE_URL
+        value: https://bank-transfer.onrender.com
+      - key: ACCOUNT_SERVICE_URL
+        value: https://bank-account.onrender.com
+      - key: ADMIN_SERVICE_URL
+        value: https://bank-admin.onrender.com
+
+  - type: web
+    name: bank-transfer
+    runtime: python
+    repo: https://github.com/Tungdz1058/Secure-API-Gateway-with-Cryptographic-Enforcement
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd services/transfer && uvicorn app:app --host 0.0.0.0 --port 5001
+
+  - type: web
+    name: bank-account
+    runtime: python
+    repo: https://github.com/Tungdz1058/Secure-API-Gateway-with-Cryptographic-Enforcement
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd services/account && uvicorn app:app --host 0.0.0.0 --port 5002
+
+  - type: web
+    name: bank-admin
+    runtime: python
+    repo: https://github.com/Tungdz1058/Secure-API-Gateway-with-Cryptographic-Enforcement
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd services/admin && uvicorn app:app --host 0.0.0.0 --port 5003
