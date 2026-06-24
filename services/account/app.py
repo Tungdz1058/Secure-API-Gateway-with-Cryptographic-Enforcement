@@ -14,6 +14,14 @@ accounts = {
     "ACC004": {"user_id": "user1", "balance": 500, "currency": "USD", "status": "active"}
 }
 
+@app.get("/")
+async def root():
+    return {"message": "Account Service is running", "service": "account"}
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "account"}
+
 @app.get("/{account_id}")
 async def get_account(account_id: str, authorization: str = Header(None)):
     if account_id not in accounts:
@@ -48,16 +56,3 @@ async def get_user_accounts(user_id: str, authorization: str = Header(None)):
         "accounts": user_accounts,
         "total_balance": sum(a["balance"] for a in user_accounts)
     }
-@app.get("/")
-async def root():
-    return {"message": "Service is running", "service": "account"}  # Thay "transfer" bằng tên service tương ứng
-@app.get("/health")
-async def health():
-    return {"status": "ok", "service": "account"}  # Thay "transfer" bằng tên service tương ứng
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "service": "account"}
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=5002)
