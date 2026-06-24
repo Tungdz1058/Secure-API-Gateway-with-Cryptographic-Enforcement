@@ -17,6 +17,14 @@ accounts = {
 
 transactions = []
 
+@app.get("/")
+async def root():
+    return {"message": "Transfer Service is running", "service": "transfer"}
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "transfer"}
+
 @app.post("/transfer")
 async def transfer_money(request: TransferRequest, authorization: str = Header(None)):
     if request.from_account not in accounts:
@@ -96,16 +104,6 @@ async def get_history(account_id: str, authorization: str = Header(None)):
         "transactions": user_transactions[-10:],
         "total": len(user_transactions)
     }
-@app.get("/")
-async def root():
-    return {"message": "Service is running", "service": "transfer"}  # Thay "transfer" bằng tên service tương ứng
-@app.get("/health")
-async def health():
-    return {"status": "ok", "service": "transfer"}  # Thay "transfer" bằng tên service tương ứng
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "service": "transfer"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5001)
