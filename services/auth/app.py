@@ -26,12 +26,12 @@ if REDIS_URL:
         redis_client = redis.from_url(REDIS_URL, decode_responses=True)
         redis_client.ping()
         USE_REDIS = True
-        print("Redis connected")
+        print("✅ Redis connected")
     except Exception as e:
-        print(f"Redis not available: {e}")
+        print(f"❌ Redis not available: {e}")
 
 if not USE_REDIS:
-    print("Using in-memory storage (not persistent)")
+    print("⚠️ Using in-memory storage (not persistent)")
     nonce_store = {}
     revoked_tokens = set()
     active_sessions = {}
@@ -151,8 +151,13 @@ async def verify_endpoint(
     x_signature: str = Header(None),
     x_required_role: str = Header(None),
 ):
-    # ✅ Khởi tạo biến
+    print(f"\n{'='*50}")
+    print(f"🔐 AUTH VERIFICATION REQUEST")
+    print(f"{'='*50}")
+    
     hmac_verified = False
+    jwt_verified = False
+    session_active = False
     
     # ===== 1. JWT VERIFICATION =====
     if not authorization or not authorization.startswith("Bearer "):
@@ -160,86 +165,114 @@ async def verify_endpoint(
     token = authorization.split(" ")[1]
 
     try:
-        jwt_payload = verify_jwt(token)
+        jwt_payload = verify_jwt(token, check_session=True)
+        jwt_verified = True
+        session_active = True
+        print(f"✅ JWT verified for user: {jwt_payload.get('sub')}")
     except ExpiredSignatureError:
+        print(f"❌ Token expired")
         raise HTTPException(status_code=401, detail="Token expired")
     except InvalidTokenError as e:
+        print(f"❌ Invalid token: {str(e)}")
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
     except HTTPException as e:
+        print(f"❌ JWT verification failed: {e.detail}")
         raise e
 
     # ===== 2. HMAC VERIFICATION =====
-    hmac_verified = False
-    
-    # ✅ Kiểm tra HMAC headers
-    if not x_timestamp or not x_nonce or not x_signature:
-        raise HTTPException(status_code=401, detail="Missing HMAC headers")
-    
-    # ✅ Verify timestamp
     try:
-        ts = int(x_timestamp)
-        now = int(datetime.now(timezone.utc).timestamp())
-        if abs(now - ts) > 60:
-            raise HTTPException(status_code=401, detail="Timestamp expired")
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid timestamp")
-    
-    # ✅ Verify nonce
-    if USE_REDIS:
-        if redis_client.get(x_nonce):
-            raise HTTPException(status_code=401, detail="Nonce already used")
-        redis_client.set(x_nonce, "1", ex=120)
-    else:
-        if x_nonce in nonce_store:
-            raise HTTPException(status_code=401, detail="Nonce already used")
-        nonce_store[x_nonce] = True
-    
-    # ✅ Tính HMAC
-    body_bytes = await request.body()
-    body_str = body_bytes.decode() if body_bytes else ""
-    
-    original_method = request.headers.get("x-original-method", request.method)
-    original_path = request.headers.get("x-original-path", request.url.path)
-    
-    print(f"✅ Using original method: {original_method}")
-    print(f"✅ Using original path: {original_path}")
-    
-    canonical = f"{original_method}|{original_path}|{x_timestamp}|{x_nonce}|{body_str}"
-    print(f"🔑 Canonical: {canonical}")
-    
-    hmac_secret = get_hmac_secret()
-    expected = hmac.new(hmac_secret, canonical.encode(), hashlib.sha256).hexdigest()
-    print(f"🔑 Expected: {expected}")
-    print(f"🔑 Received: {x_signature}")
-    
-    # ✅ QUAN TRỌNG: PHẢI KIỂM TRA VÀ RAISE EXCEPTION
-    if not hmac.compare_digest(expected, x_signature):
-        print(f"❌ HMAC MISMATCH! Rejecting request")
-        raise HTTPException(status_code=401, detail="Invalid HMAC signature")
-    
-    # ✅ Nếu đến được đây, HMAC đúng
-    hmac_verified = True
-    print(f"✅ HMAC verified successfully")
+        # Kiểm tra HMAC headers
+        if not x_timestamp or not x_nonce or not x_signature:
+            print(f"❌ Missing HMAC headers")
+            raise HTTPException(status_code=401, detail="Missing HMAC headers")
+        
+        # Verify timestamp
+        try:
+            ts = int(x_timestamp)
+            now = int(datetime.now(timezone.utc).timestamp())
+            if abs(now - ts) > 60:
+                print(f"❌ Timestamp expired: now={now}, ts={ts}, diff={abs(now-ts)}")
+                raise HTTPException(status_code=401, detail="Timestamp expired")
+        except ValueError:
+            print(f"❌ Invalid timestamp: {x_timestamp}")
+            raise HTTPException(status_code=401, detail="Invalid timestamp")
+        
+        # Verify nonce (prevent replay attacks)
+        if USE_REDIS:
+            if redis_client.get(x_nonce):
+                print(f"❌ Nonce already used: {x_nonce}")
+                raise HTTPException(status_code=401, detail="Nonce already used")
+            redis_client.set(x_nonce, "1", ex=120)
+        else:
+            if x_nonce in nonce_store:
+                print(f"❌ Nonce already used: {x_nonce}")
+                raise HTTPException(status_code=401, detail="Nonce already used")
+            nonce_store[x_nonce] = True
+        
+        # Tính HMAC
+        body_bytes = await request.body()
+        body_str = body_bytes.decode() if body_bytes else ""
+        
+        original_method = request.headers.get("x-original-method", request.method)
+        original_path = request.headers.get("x-original-path", request.url.path)
+        
+        print(f"📝 Original Method: {original_method}")
+        print(f"📝 Original Path: {original_path}")
+        print(f"📝 Timestamp: {x_timestamp}")
+        print(f"📝 Nonce: {x_nonce}")
+        print(f"📝 Body: {body_str[:100]}...")
+        
+        canonical = f"{original_method}|{original_path}|{x_timestamp}|{x_nonce}|{body_str}"
+        print(f"🔑 Canonical: {canonical}")
+        
+        hmac_secret = get_hmac_secret()
+        expected = hmac.new(hmac_secret, canonical.encode(), hashlib.sha256).hexdigest()
+        print(f"🔑 Expected HMAC: {expected}")
+        print(f"🔑 Received HMAC: {x_signature}")
+        
+        # QUAN TRỌNG: So sánh và từ chối nếu sai
+        if not hmac.compare_digest(expected, x_signature):
+            print(f"❌ HMAC MISMATCH! Rejecting request")
+            raise HTTPException(status_code=401, detail="Invalid HMAC signature")
+        
+        hmac_verified = True
+        print(f"✅ HMAC verified successfully")
+        
+    except HTTPException as e:
+        print(f"❌ HMAC verification failed: {e.detail}")
+        raise e
 
     # ===== 3. ROLE VERIFICATION =====
     if x_required_role:
         roles = jwt_payload.get("https://api-gateway-demo.com/roles", [])
+        print(f"📝 Required role: {x_required_role}")
+        print(f"📝 User roles: {roles}")
+        
         if x_required_role not in roles:
+            print(f"❌ Role mismatch: {x_required_role} not in {roles}")
             raise HTTPException(
                 status_code=403,
                 detail=f"Role required: {x_required_role}"
             )
+        print(f"✅ Role verification passed")
 
     # ===== 4. RESPONSE =====
-    return {
+    response_data = {
         "verified": True,
-        "jwt_verified": True,
+        "jwt_verified": jwt_verified,
         "hmac_verified": hmac_verified,
+        "session_active": session_active,
         "user": jwt_payload.get("sub"),
         "email": jwt_payload.get("email", jwt_payload.get("sub")),
         "roles": jwt_payload.get("https://api-gateway-demo.com/roles", []),
-        "session_active": True
+        "session_active": session_active
     }
+    
+    print(f"✅ Auth verification successful")
+    print(f"📤 Response: {response_data}")
+    print(f"{'='*50}\n")
+    
+    return response_data
 
 @app.post("/auth/login")
 async def login_endpoint(authorization: str = Header(None)):
@@ -288,7 +321,20 @@ async def revoke_token_endpoint(authorization: str = Header(None)):
 
 @app.get("/auth/health")
 async def health():
-    return {"status": "ok", "service": "auth"}
+    return {
+        "status": "ok",
+        "service": "auth",
+        "redis": USE_REDIS
+    }
+
+@app.get("/auth/debug/nonce/{nonce}")
+async def debug_nonce(nonce: str):
+    """Debug endpoint to check nonce status"""
+    if USE_REDIS:
+        exists = redis_client.get(nonce) is not None
+    else:
+        exists = nonce in nonce_store
+    return {"nonce": nonce, "exists": exists}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5000)
