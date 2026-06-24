@@ -557,46 +557,50 @@
     // ADMIN PANEL - GỌI AUTH SERVICE QUA GATEWAY
     // ============================================================
     document.getElementById('adminBtn').onclick = async () => {
-        if (!idToken) { 
-            alert('Vui lòng đăng nhập trước'); 
-            return; 
+    if (!idToken) { 
+        alert('Vui lòng đăng nhập trước'); 
+        return; 
+    }
+    
+    showResultArea('⚙️ Admin Panel', 'Đang kiểm tra quyền truy cập qua Auth Service...', 'pending');
+    
+    try {
+        const verifyResp = await fetch(GATEWAY_URL + '/api/auth/verify', {
+            method: 'POST',
+            headers: {
+                'Authorization': 'Bearer ' + idToken,
+                'Content-Type': 'application/json',
+                'X-Required-Role': 'admin'
+            }
+        });
+        
+        if (verifyResp.status === 403) {
+            const data = await verifyResp.json();
+            showResultArea('⛔ Truy cập bị từ chối', data.detail || 'Bạn không có quyền truy cập Admin Panel', 'error');
+            document.getElementById('adminPanel').style.display = 'none';
+            return;
         }
         
-        showResultArea('⚙️ Admin Panel', 'Đang kiểm tra quyền truy cập qua Auth Service...', 'pending');
+        if (verifyResp.status === 401) {
+            showResultArea('⛔ Phiên đăng nhập không hợp lệ', 'Vui lòng đăng nhập lại', 'error');
+            return;
+        }
         
-        try {
-            const verifyResp = await fetch(GATEWAY_URL + '/api/auth/verify', {
-                method: 'POST',
-                headers: {
-                    'Authorization': 'Bearer ' + idToken,
-                    'Content-Type': 'application/json'
-                }
-            });
-            
-            if (verifyResp.status === 401) {
-                showResultArea('⛔ Phiên đăng nhập không hợp lệ', 'Vui lòng đăng nhập lại', 'error');
-                return;
-            }
-            
+        if (verifyResp.status === 200) {
             const verifyData = await verifyResp.json();
-            
-            if (!verifyData.roles || !verifyData.roles.includes('admin')) {
-                showResultArea('⛔ Truy cập bị từ chối', 'Bạn không có quyền truy cập Admin Panel. Yêu cầu role: admin', 'error');
-                document.getElementById('adminPanel').style.display = 'none';
-                return;
-            }
-            
             document.getElementById('adminPanel').style.display = 'block';
             document.getElementById('transferForm').style.display = 'none';
             document.getElementById('withdrawForm').style.display = 'none';
             document.getElementById('resultArea').style.display = 'none';
             showResultArea('⚙️ Admin Panel', 'Xác thực role admin thành công', 'success');
-            
             document.getElementById('listUsersBtn').click();
-        } catch (err) {
-            showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
+        } else {
+            showResultArea('❌ Lỗi', 'Status: ' + verifyResp.status, 'error');
         }
-    };
+    } catch (err) {
+        showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
+    }
+};
 
     document.getElementById('listUsersBtn').onclick = async () => {
         if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
