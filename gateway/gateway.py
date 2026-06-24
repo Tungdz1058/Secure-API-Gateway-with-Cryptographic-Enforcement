@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 import os
@@ -28,7 +28,7 @@ app.add_middleware(
 
 # ========== CONFIG ==========
 HMAC_SECRET = os.environ.get("HMAC_SECRET", "my-secret-key-change-in-production").encode()
-CACHE_TTL = 600  # 10 phút
+CACHE_TTL = 600
 MAX_RETRIES = 3
 
 # ========== SERVICE MAP ==========
@@ -39,7 +39,6 @@ SERVICE_MAP = {
     "admin": os.environ.get("ADMIN_SERVICE_URL", "https://bank-admin-ou0n.onrender.com")
 }
 
-# ========== ROLE REQUIREMENTS ==========
 ROLE_REQUIREMENTS = {
     "admin": ["admin"],
     "transfer": ["user", "admin"],
@@ -52,7 +51,6 @@ PREFIX_SERVICES = ["auth"]
 role_cache = {}
 
 def get_cached_roles(token: str) -> list:
-    """Lấy roles từ cache"""
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     if token_hash in role_cache:
         cache_entry = role_cache[token_hash]
@@ -65,7 +63,6 @@ def get_cached_roles(token: str) -> list:
     return None
 
 def set_cached_roles(token: str, roles: list, ttl: int = CACHE_TTL):
-    """Lưu roles vào cache"""
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     role_cache[token_hash] = {
         "roles": roles,
@@ -74,13 +71,11 @@ def set_cached_roles(token: str, roles: list, ttl: int = CACHE_TTL):
     logger.info(f"💾 Cached roles {roles} for token {token_hash[:10]}... (TTL: {ttl}s)")
 
 def clear_cache():
-    """Xóa toàn bộ cache"""
     role_cache.clear()
     logger.info("🗑️ Cache cleared")
 
 # ========== AUTH SERVICE CALL WITH RETRY ==========
 async def call_auth_service_with_retry(auth_url: str, headers: dict, max_retries: int = MAX_RETRIES):
-    """Gọi Auth Service với cơ chế retry khi bị rate limit"""
     async with httpx.AsyncClient() as client:
         for attempt in range(max_retries):
             try:
@@ -92,7 +87,7 @@ async def call_auth_service_with_retry(auth_url: str, headers: dict, max_retries
                 )
                 
                 if response.status_code == 429:
-                    wait_time = 2 ** attempt  # 1s, 2s, 4s
+                    wait_time = 2 ** attempt
                     logger.warning(f"⏳ Rate limited, waiting {wait_time}s...")
                     await asyncio.sleep(wait_time)
                     continue
@@ -122,7 +117,6 @@ async def gateway(request: Request, service: str, path: str):
     
     logger.info(f"📨 Request: {request.method} /api/{service}/{path} from {request.client.host}")
     
-    # ===== KIỂM TRA ROLE =====
     if service in ROLE_REQUIREMENTS:
         authorization = request.headers.get("authorization")
         if not authorization:
@@ -135,7 +129,6 @@ async def gateway(request: Request, service: str, path: str):
         required_roles = ROLE_REQUIREMENTS[service]
         logger.info(f"🔍 Required roles for {service}: {required_roles}")
         
-        # 1. Kiểm tra cache
         cached_roles = get_cached_roles(token)
         if cached_roles is not None:
             if any(role in cached_roles for role in required_roles):
@@ -144,7 +137,6 @@ async def gateway(request: Request, service: str, path: str):
                 logger.warning(f"❌ Cache: token roles {cached_roles} not in {required_roles}")
                 raise HTTPException(status_code=403, detail=f"Role required: {required_roles}")
         else:
-            # 2. Verify HMAC
             x_timestamp = request.headers.get("x-timestamp", "")
             x_nonce = request.headers.get("x-nonce", "")
             x_signature = request.headers.get("x-signature", "")
@@ -163,7 +155,6 @@ async def gateway(request: Request, service: str, path: str):
                 logger.warning(f"❌ Invalid HMAC signature for {full_path}")
                 raise HTTPException(status_code=401, detail="Invalid HMAC signature")
             
-            # 3. Gọi Auth Service
             auth_url = f"{SERVICE_MAP['auth']}/auth/verify"
             verify_response = await call_auth_service_with_retry(
                 auth_url,
@@ -186,7 +177,6 @@ async def gateway(request: Request, service: str, path: str):
                 roles = verify_data.get("roles", [])
                 logger.info(f"🔍 Roles from Auth Service: {roles}")
                 
-                # Cache roles
                 set_cached_roles(token, roles, ttl=CACHE_TTL)
                 
                 if not any(role in roles for role in required_roles):
@@ -197,7 +187,6 @@ async def gateway(request: Request, service: str, path: str):
                 logger.error(f"❌ Auth Service response error: {str(e)}")
                 raise HTTPException(status_code=502, detail="Auth Service returned invalid response")
     
-    # ===== FORWARD REQUEST =====
     if service in PREFIX_SERVICES:
         forward_path = f"{service}/{path}"
     else:
@@ -245,7 +234,6 @@ async def clear_cache_endpoint(authorization: str = Header(None)):
     
     token = authorization.split(" ")[1]
     
-    # Kiểm tra admin (gọi Auth Service)
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
