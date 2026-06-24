@@ -94,7 +94,6 @@ async def gateway(request: Request, service: str, path: str):
     
     logger.info(f"📨 Request: {request.method} /api/{service}/{path}")
     
-    # ===== KIỂM TRA ROLE =====
     if service in ROLE_REQUIREMENTS:
         authorization = request.headers.get("authorization")
         if not authorization:
@@ -107,16 +106,18 @@ async def gateway(request: Request, service: str, path: str):
         required_roles = ROLE_REQUIREMENTS[service]
         required_role = required_roles[0]
         
-        # Kiểm tra cache
         cached_roles = get_cached_roles(token)
         if cached_roles is not None:
             if not any(role in cached_roles for role in required_roles):
                 raise HTTPException(status_code=403, detail=f"Role required: {required_roles}")
         else:
-            # Gửi request đến Auth Server để verify
             x_timestamp = request.headers.get("x-timestamp", "")
             x_nonce = request.headers.get("x-nonce", "")
             x_signature = request.headers.get("x-signature", "")
+            
+            # ✅ Lấy body
+            body_bytes = await request.body()
+            body_str = body_bytes.decode() if body_bytes else ""
             
             auth_headers = {
                 "Authorization": authorization,
@@ -125,13 +126,18 @@ async def gateway(request: Request, service: str, path: str):
                 "X-Timestamp": x_timestamp,
                 "X-Nonce": x_nonce,
                 "X-Signature": x_signature,
-                "X-Original-Path": f"/api/{service}/{path}"  # ✅ Path gốc
+                "X-Original-Path": f"/api/{service}/{path}"
             }
             
             logger.info(f"🔑 Sending original path: /api/{service}/{path}")
+            logger.info(f"🔑 Body: {body_str}")
             
             auth_url = f"{SERVICE_MAP['auth']}/auth/verify"
-            verify_response = await call_auth_service_with_retry(auth_url, auth_headers)
+            verify_response = await call_auth_service_with_retry(
+                auth_url,
+                headers=auth_headers,
+                body=body_str  # ✅ Forward body
+            )
             
             if verify_response is None or verify_response.status_code != 200:
                 error_detail = "Authentication failed"
