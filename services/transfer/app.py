@@ -96,6 +96,12 @@ async def get_history(account_id: str, authorization: str = Header(None)):
         "transactions": user_transactions[-10:],
         "total": len(user_transactions)
     }
+@app.get("/")
+async def root():
+    return {"message": "Service is running", "service": "transfer"}  # Thay "transfer" bằng tên service tương ứng
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "transfer"}  # Thay "transfer" bằng tên service tương ứng
 
 @app.get("/health")
 async def health():
