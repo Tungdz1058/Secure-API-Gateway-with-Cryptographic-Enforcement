@@ -170,6 +170,7 @@ async def verify_endpoint(
     x_timestamp: str = Header(None),
     x_nonce: str = Header(None),
     x_signature: str = Header(None),
+    x_required_role: str = Header(None),
 ):
     # 1. Kiểm tra JWT
     if not authorization or not authorization.startswith("Bearer "):
@@ -214,7 +215,16 @@ async def verify_endpoint(
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
         hmac_verified = True
 
-    # 3. Trả về kết quả
+    # 3. Kiểm tra role nếu có yêu cầu
+    if x_required_role:
+        roles = jwt_payload.get("https://api-gateway-demo.com/roles", [])
+        if x_required_role not in roles:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Role required: {x_required_role}"
+            )
+
+    # 4. Trả về kết quả
     return {
         "verified": True,
         "jwt_verified": True,
