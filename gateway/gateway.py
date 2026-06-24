@@ -59,10 +59,11 @@ SERVICE_MAP = {
     "admin": os.environ.get("ADMIN_SERVICE_URL", "https://bank-admin.onrender.com")
 }
 
+# ========== ROLE REQUIREMENTS ==========
 ROLE_REQUIREMENTS = {
-    "transfer": ["user", "admin"],
-    "account": ["user", "admin"],
-    "admin": ["admin"]
+    "transfer": ["user", "admin"],      # User và admin đều được chuyển tiền
+    "account": ["user", "admin"],       # User và admin đều xem số dư
+    "admin": ["admin"]                  # Chỉ admin mới vào admin panel
 }
 
 print("Service Map:", SERVICE_MAP)
