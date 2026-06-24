@@ -252,9 +252,6 @@
         savedVerifier = sessionStorage.getItem('pkce_verifier');
     }
 
-    // ============================================================
-    // PKCE HELPERS
-    // ============================================================
     function generateCodeVerifier() {
         const array = new Uint8Array(32);
         crypto.getRandomValues(array);
@@ -269,9 +266,6 @@
             .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
     }
 
-    // ============================================================
-    // JWT DECODE
-    // ============================================================
     function decodeJwt(token) {
         try {
             const parts = token.split('.');
@@ -282,9 +276,6 @@
         } catch(e) { return null; }
     }
 
-    // ============================================================
-    // HMAC HELPERS
-    // ============================================================
     const HMAC_SECRET = 'my-secret-key-change-in-production';
 
     async function generateHmacSignature(method, path, timestamp, nonce, body) {
@@ -325,13 +316,6 @@
         }
     }
 
-    function showResult(elementId, data, type) {
-        const el = document.getElementById(elementId);
-        if (!el) return;
-        const content = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-        el.innerHTML = '<div class="status-text status-' + type + '"><pre style="margin:0;white-space:pre-wrap;word-break:break-all;">' + content + '</pre></div>';
-    }
-
     function showResultArea(title, content, type) {
         document.getElementById('resultArea').style.display = 'block';
         document.getElementById('resultTitle').innerText = title;
@@ -339,9 +323,6 @@
         el.innerHTML = '<div class="status-text status-' + type + '"><pre style="margin:0;white-space:pre-wrap;word-break:break-all;">' + content + '</pre></div>';
     }
 
-    // ============================================================
-    // DISPLAY FUNCTIONS
-    // ============================================================
     function displayUserInfo(token) {
         const data = decodeJwt(token);
         if (data) {
@@ -351,15 +332,10 @@
             userRole = roles.includes('admin') ? 'admin' : 'user';
             document.getElementById('userRole').innerText = userRole;
             document.getElementById('userInfo').style.display = 'block';
-            
-            // Hiển thị nút Admin cho mọi user
             document.getElementById('adminBtn').style.display = 'inline-block';
         }
     }
 
-    // ============================================================
-    // AUTH0 LOGIN
-    // ============================================================
     document.getElementById('loginBtn').onclick = async () => {
         const verifier = generateCodeVerifier();
         const challenge = await generateCodeChallenge(verifier);
@@ -376,9 +352,6 @@
         window.location.href = authUrl;
     };
 
-    // ============================================================
-    // CALLBACK HANDLER
-    // ============================================================
     async function handleCallback() {
         const params = new URLSearchParams(window.location.search);
         const code = params.get('code');
@@ -419,14 +392,12 @@
                 displayUserInfo(idToken);
                 window.history.replaceState({}, document.title, window.location.pathname);
 
-                // Active session
                 const loginResp = await fetch(GATEWAY_URL + '/api/login', {
                     method: 'POST',
                     headers: { 'Authorization': 'Bearer ' + idToken }
                 });
                 const loginData = await loginResp.json();
                 console.log('Login session:', loginData);
-                
                 showResultArea('✅ Đăng nhập thành công', 'Bạn đã đăng nhập thành công. Hãy chọn chức năng bên dưới.', 'success');
             } else {
                 document.getElementById('tokenDisplay').textContent = 'Error from Auth0:\n' + JSON.stringify(data, null, 2);
@@ -436,9 +407,6 @@
         }
     }
 
-    // ============================================================
-    // XEM SO DU
-    // ============================================================
     document.getElementById('balanceBtn').onclick = async () => {
         if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
         showResultArea('💰 Đang lấy số dư...', 'Đang gọi API Account Service...', 'pending');
@@ -477,9 +445,6 @@
         }
     };
 
-    // ============================================================
-    // CHUYỂN TIỀN
-    // ============================================================
     document.getElementById('transferBtn').onclick = () => {
         document.getElementById('transferForm').style.display = 'block';
         document.getElementById('withdrawForm').style.display = 'none';
@@ -533,9 +498,6 @@
         }
     };
 
-    // ============================================================
-    // RÚT TIỀN
-    // ============================================================
     document.getElementById('withdrawBtn').onclick = () => {
         document.getElementById('withdrawForm').style.display = 'block';
         document.getElementById('transferForm').style.display = 'none';
@@ -587,20 +549,54 @@
         }
     };
 
-    // ============================================================
-    // ADMIN PANEL - LUÔN HIỂN THỊ NHƯNG KIỂM TRA ROLE
-    // ============================================================
-    document.getElementById('adminBtn').onclick = () => {
+    document.getElementById('adminBtn').onclick = async () => {
+        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
+        
         if (userRole !== 'admin') {
             showResultArea('⛔ Truy cập bị từ chối', 'Bạn không có quyền truy cập Admin Panel. Yêu cầu role: admin', 'error');
             document.getElementById('adminPanel').style.display = 'none';
             return;
         }
-        document.getElementById('adminPanel').style.display = 'block';
-        document.getElementById('transferForm').style.display = 'none';
-        document.getElementById('withdrawForm').style.display = 'none';
-        document.getElementById('resultArea').style.display = 'none';
-        showResultArea('⚙️ Admin Panel', 'Chọn chức năng bên dưới', 'pending');
+
+        showResultArea('⚙️ Admin Panel', 'Đang kiểm tra quyền truy cập...', 'pending');
+        
+        const timestamp = Math.floor(Date.now() / 1000).toString();
+        const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+        const method = 'GET';
+        const path = '/api/admin/users';
+
+        try {
+            const signature = await generateHmacSignature(method, path, timestamp, nonce, '');
+            const resp = await fetch(GATEWAY_URL + path, {
+                method: method,
+                headers: {
+                    'Authorization': 'Bearer ' + idToken,
+                    'X-Timestamp': timestamp,
+                    'X-Nonce': nonce,
+                    'X-Signature': signature
+                }
+            });
+            
+            if (resp.status === 403) {
+                const data = await resp.json();
+                showResultArea('⛔ Truy cập bị từ chối', data.detail || 'Bạn không có quyền truy cập Admin Panel', 'error');
+                document.getElementById('adminPanel').style.display = 'none';
+                return;
+            }
+            
+            if (resp.status === 200) {
+                const data = await resp.json();
+                document.getElementById('adminPanel').style.display = 'block';
+                document.getElementById('transferForm').style.display = 'none';
+                document.getElementById('withdrawForm').style.display = 'none';
+                document.getElementById('resultArea').style.display = 'none';
+                showResultArea('⚙️ Admin Panel - Danh sách users', JSON.stringify(data, null, 2), 'success');
+            } else {
+                showResultArea('❌ Lỗi', 'Status: ' + resp.status, 'error');
+            }
+        } catch (err) {
+            showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
+        }
     };
 
     document.getElementById('listUsersBtn').onclick = async () => {
@@ -626,6 +622,11 @@
                     'X-Signature': signature
                 }
             });
+            if (resp.status === 403) {
+                const data = await resp.json();
+                showResultArea('⛔ Truy cập bị từ chối', data.detail || 'Bạn không có quyền truy cập Admin Panel', 'error');
+                return;
+            }
             const data = await resp.json();
             showResultArea('📋 Danh sách users', JSON.stringify(data, null, 2), 'success');
         } catch (err) {
@@ -665,9 +666,6 @@
         }
     };
 
-    // ============================================================
-    // LOGOUT
-    // ============================================================
     document.getElementById('logoutBtn').onclick = async () => {
         if (idToken) {
             await fetch(GATEWAY_URL + '/api/revoke', {
@@ -696,731 +694,6 @@
         window.location.href = logoutUrl;
     };
 
-    // ============================================================
-    // INIT
-    // ============================================================
-    if (hasCode) {
-        handleCallback();
-    } else {
-        sessionStorage.removeItem('pkce_verifier');
-        savedVerifier = null;
-        document.getElementById('tokenDisplay').textContent = '(chưa đăng nhập)';
-        document.getElementById('balanceBtn').disabled = true;
-        document.getElementById('transferBtn').disabled = true;
-        document.getElementById('withdrawBtn').disabled = true;
-        document.getElementById('adminBtn').disabled = true;
-        document.getElementById('logoutBtn').disabled = true;
-        document.getElementById('loginBtn').disabled = false;
-        document.getElementById('userInfo').style.display = 'none';
-        document.getElementById('resultArea').style.display = 'none';
-        document.getElementById('transferForm').style.display = 'none';
-        document.getElementById('withdrawForm').style.display = 'none';
-        document.getElementById('adminPanel').style.display = 'none';
-        updateHmacStatus('info', 'Chưa đăng nhập');
-    }
-</script>
-</body>
-</html><!DOCTYPE html>
-<html lang="vi">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ngân Hàng Số - Secure Banking</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-            background: #f0f2f5;
-            padding: 20px;
-            min-height: 100vh;
-        }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .header {
-            background: linear-gradient(135deg, #003366 0%, #004d99 50%, #0066cc 100%);
-            color: white;
-            padding: 20px 30px;
-            border-radius: 12px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 15px;
-        }
-        .header h1 { font-size: 24px; }
-        .header .subtitle { font-size: 14px; opacity: 0.9; }
-        .header-right { text-align: right; font-size: 13px; line-height: 1.6; }
-        .content { background: white; padding: 30px; border-radius: 12px; margin-top: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .button-group { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 25px; }
-        button { padding: 10px 22px; font-size: 14px; font-weight: 500; border: none; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
-        button:disabled { opacity: 0.5; cursor: not-allowed; }
-        .btn-primary { background: #003366; color: white; }
-        .btn-primary:hover:not(:disabled) { background: #002244; }
-        .btn-success { background: #28a745; color: white; }
-        .btn-success:hover:not(:disabled) { background: #1e7e34; }
-        .btn-danger { background: #dc3545; color: white; }
-        .btn-danger:hover:not(:disabled) { background: #bd2130; }
-        .btn-warning { background: #ffc107; color: #333; }
-        .btn-warning:hover:not(:disabled) { background: #e0a800; }
-        .btn-info { background: #17a2b8; color: white; }
-        .btn-info:hover:not(:disabled) { background: #138496; }
-        .card { background: #f8f9fa; border-radius: 8px; padding: 20px; margin-bottom: 20px; border-left: 4px solid #003366; }
-        .card h3 { margin-bottom: 15px; font-size: 17px; color: #003366; }
-        .row { display: flex; gap: 15px; flex-wrap: wrap; }
-        .col { flex: 1; min-width: 200px; }
-        .info-row { margin: 8px 0; font-size: 14px; }
-        .info-label { font-weight: 600; display: inline-block; width: 120px; color: #333; }
-        .info-value { color: #555; word-break: break-all; }
-        .balance { font-size: 28px; font-weight: 700; color: #003366; }
-        .balance-currency { font-size: 16px; font-weight: 400; color: #666; }
-        .code-block {
-            background: #1e1e1e;
-            color: #d4d4d4;
-            border-radius: 8px;
-            padding: 16px;
-            overflow-x: auto;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-            white-space: pre-wrap;
-            word-break: break-all;
-            max-height: 350px;
-            overflow-y: auto;
-        }
-        .api-response {
-            background: #1e1e1e;
-            color: #d4d4d4;
-            border-radius: 8px;
-            padding: 16px;
-            font-family: 'Courier New', monospace;
-            font-size: 13px;
-            overflow-x: auto;
-            white-space: pre-wrap;
-            word-break: break-all;
-            min-height: 60px;
-        }
-        .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; font-weight: 600; margin-bottom: 5px; font-size: 14px; color: #333; }
-        .form-group input, .form-group select { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
-        .form-group input:focus { border-color: #003366; outline: none; }
-        .badge { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; }
-        .badge-success { background: #d4edda; color: #155724; }
-        .badge-danger { background: #f8d7da; color: #721c24; }
-        .badge-warning { background: #fff3cd; color: #856404; }
-        .badge-info { background: #d1ecf1; color: #0c5460; }
-        .footer { text-align: center; padding: 20px; font-size: 12px; color: #888; margin-top: 20px; }
-        .hidden { display: none; }
-        .admin-panel { border: 2px solid #dc3545; }
-        .admin-panel .card { border-left-color: #dc3545; }
-        .status-text { font-size: 13px; margin-top: 10px; padding: 8px 12px; border-radius: 6px; }
-        .status-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .status-error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-        .status-pending { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
-        .status-info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
-        .result-box { margin-top: 15px; }
-        @media (max-width: 768px) {
-            .header { flex-direction: column; text-align: center; }
-            .header-right { text-align: center; width: 100%; }
-            .button-group { flex-direction: column; }
-            button { width: 100%; }
-            .row { flex-direction: column; }
-        }
-    </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.9.0/sha256.min.js"></script>
-</head>
-<body>
-
-<div class="container">
-    <div class="header">
-        <div>
-            <h1>🏦 Ngân Hàng Số</h1>
-            <div class="subtitle">Secure API Gateway · Cryptographic Enforcement</div>
-        </div>
-        <div class="header-right">
-            <strong>Nhóm thực hiện</strong><br>
-            Lê Đình Tùng - 24162140<br>
-            Trần Ngô Anh Tú - 24152141<br>
-            Cao Nhứt Thạnh - 24162118
-        </div>
-    </div>
-
-    <div class="content">
-        <!-- Buttons -->
-        <div class="button-group">
-            <button id="loginBtn" class="btn-primary">🔑 Đăng nhập</button>
-            <button id="balanceBtn" class="btn-success" disabled>💰 Xem số dư</button>
-            <button id="transferBtn" class="btn-warning" disabled>💸 Chuyển tiền</button>
-            <button id="withdrawBtn" class="btn-info" disabled>🏧 Rút tiền</button>
-            <button id="adminBtn" class="btn-danger" disabled>⚙️ Admin Panel</button>
-            <button id="logoutBtn" class="btn-danger" disabled>🚪 Đăng xuất</button>
-        </div>
-
-        <!-- User Info -->
-        <div id="userInfo" class="card hidden">
-            <h3>👤 Thông tin người dùng</h3>
-            <div class="info-row"><span class="info-label">User ID:</span><span class="info-value" id="userId"></span></div>
-            <div class="info-row"><span class="info-label">Email:</span><span class="info-value" id="userEmail"></span></div>
-            <div class="info-row"><span class="info-label">Role:</span><span class="info-value" id="userRole"></span></div>
-            <div class="info-row"><span class="info-label">HMAC Status:</span><span class="info-value" id="hmacStatus"><span class="badge badge-info">Chưa gửi</span></span></div>
-        </div>
-
-        <!-- Result Area -->
-        <div id="resultArea" class="card hidden">
-            <h3 id="resultTitle">📊 Kết quả</h3>
-            <div id="resultContent">
-                <div class="api-response" id="apiResponse">(ấn nút để gọi API)</div>
-            </div>
-        </div>
-
-        <!-- Transfer Form -->
-        <div id="transferForm" class="card hidden">
-            <h3>💸 Chuyển tiền</h3>
-            <div class="row">
-                <div class="col">
-                    <div class="form-group">
-                        <label>Tài khoản nguồn</label>
-                        <input type="text" id="fromAccount" value="ACC001" readonly>
-                    </div>
-                </div>
-                <div class="col">
-                    <div class="form-group">
-                        <label>Tài khoản đích</label>
-                        <input type="text" id="toAccount" placeholder="VD: ACC002">
-                    </div>
-                </div>
-            </div>
-            <div class="row">
-                <div class="col">
-                    <div class="form-group">
-                        <label>Số tiền (VND)</label>
-                        <input type="number" id="transferAmount" placeholder="Nhập số tiền">
-                    </div>
-                </div>
-                <div class="col">
-                    <div class="form-group">
-                        <label>Nội dung</label>
-                        <input type="text" id="transferDesc" placeholder="Nội dung chuyển tiền">
-                    </div>
-                </div>
-            </div>
-            <button id="doTransferBtn" class="btn-success">Xác nhận chuyển tiền</button>
-            <div id="transferResult" class="result-box"></div>
-        </div>
-
-        <!-- Withdraw Form -->
-        <div id="withdrawForm" class="card hidden">
-            <h3>🏧 Rút tiền</h3>
-            <div class="row">
-                <div class="col">
-                    <div class="form-group">
-                        <label>Tài khoản</label>
-                        <input type="text" id="withdrawAccount" value="ACC001" readonly>
-                    </div>
-                </div>
-                <div class="col">
-                    <div class="form-group">
-                        <label>Số tiền (VND)</label>
-                        <input type="number" id="withdrawAmount" placeholder="Nhập số tiền rút">
-                    </div>
-                </div>
-            </div>
-            <button id="doWithdrawBtn" class="btn-info">Xác nhận rút tiền</button>
-            <div id="withdrawResult" class="result-box"></div>
-        </div>
-
-        <!-- Admin Panel -->
-        <div id="adminPanel" class="card admin-panel hidden">
-            <h3>⚙️ Admin Panel - Quản lý người dùng</h3>
-            <div style="margin-bottom:15px;">
-                <button id="listUsersBtn" class="btn-danger">📋 Danh sách users</button>
-                <button id="deleteUserBtn" class="btn-danger" style="margin-left:10px;">🗑️ Xóa user</button>
-            </div>
-            <div id="adminResult" class="result-box"></div>
-        </div>
-
-        <!-- Token Display -->
-        <div class="section" style="margin-top:20px;">
-            <h3 style="color:#003366;font-size:17px;">🔐 ID Token</h3>
-            <div class="code-block" id="tokenDisplay">(chưa đăng nhập)</div>
-        </div>
-    </div>
-
-    <div class="footer">
-        <p><strong>Cryptographic Enforcement</strong> | JWT + HMAC | Nonce + Timestamp | Replay Protection</p>
-        <p>Đại học Sư phạm Kỹ thuật TP.HCM (HCMUTE) - Khoa Công nghệ Thông tin</p>
-    </div>
-</div>
-
-<script>
-    // ============================================================
-    // CONFIG
-    // ============================================================
-    const AUTH0_DOMAIN = 'apigatewaysecure.us.auth0.com';
-    const CLIENT_ID = '5GkSY8Xk4oNRpJysIWx35UCyeInC0Vs3';
-    const REDIRECT_URI = window.location.origin;
-    const GATEWAY_URL = 'https://bank-gateway-khpy.onrender.com';
-    const API_URL = GATEWAY_URL + '/api';
-
-    let idToken = null;
-    let savedVerifier = null;
-    let userRole = 'user';
-
-    const params = new URLSearchParams(window.location.search);
-    const hasCode = params.get('code') !== null;
-    const hasState = params.get('state') !== null;
-
-    if (!hasCode && !hasState) {
-        sessionStorage.removeItem('pkce_verifier');
-        savedVerifier = null;
-    } else {
-        savedVerifier = sessionStorage.getItem('pkce_verifier');
-    }
-
-    // ============================================================
-    // PKCE HELPERS
-    // ============================================================
-    function generateCodeVerifier() {
-        const array = new Uint8Array(32);
-        crypto.getRandomValues(array);
-        return btoa(String.fromCharCode(...array))
-            .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-    }
-
-    function generateCodeChallenge(verifier) {
-        const hash = sha256(verifier);
-        const bytes = new Uint8Array(hash.match(/../g).map(b => parseInt(b, 16)));
-        return btoa(String.fromCharCode(...bytes))
-            .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-    }
-
-    // ============================================================
-    // JWT DECODE
-    // ============================================================
-    function decodeJwt(token) {
-        try {
-            const parts = token.split('.');
-            if (parts.length !== 3) return null;
-            const payload = parts[1];
-            const decoded = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
-            return JSON.parse(decoded);
-        } catch(e) { return null; }
-    }
-
-    // ============================================================
-    // HMAC HELPERS
-    // ============================================================
-    const HMAC_SECRET = 'my-secret-key-change-in-production';
-
-    async function generateHmacSignature(method, path, timestamp, nonce, body) {
-        const canonical = method + '|' + path + '|' + timestamp + '|' + nonce + '|' + body;
-        const encoder = new TextEncoder();
-        const data = encoder.encode(canonical);
-        const key = await crypto.subtle.importKey(
-            'raw',
-            encoder.encode(HMAC_SECRET),
-            { name: 'HMAC', hash: 'SHA-256' },
-            false,
-            ['sign']
-        );
-        const sigBuffer = await crypto.subtle.sign('HMAC', key, data);
-        const sigArray = Array.from(new Uint8Array(sigBuffer));
-        return sigArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    }
-
-    function updateHmacStatus(status, message) {
-        const el = document.getElementById('hmacStatus');
-        const badge = el.querySelector('.badge') || document.createElement('span');
-        badge.className = 'badge';
-        if (status === 'success') {
-            badge.className += ' badge-success';
-            badge.textContent = '✓ ' + message;
-        } else if (status === 'pending') {
-            badge.className += ' badge-warning';
-            badge.textContent = '⏳ ' + message;
-        } else if (status === 'error') {
-            badge.className += ' badge-danger';
-            badge.textContent = '✗ ' + message;
-        } else {
-            badge.className += ' badge-info';
-            badge.textContent = message;
-        }
-        if (!el.querySelector('.badge')) {
-            el.appendChild(badge);
-        }
-    }
-
-    function showResult(elementId, data, type) {
-        const el = document.getElementById(elementId);
-        if (!el) return;
-        const content = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-        el.innerHTML = '<div class="status-text status-' + type + '"><pre style="margin:0;white-space:pre-wrap;word-break:break-all;">' + content + '</pre></div>';
-    }
-
-    function showResultArea(title, content, type) {
-        document.getElementById('resultArea').style.display = 'block';
-        document.getElementById('resultTitle').innerText = title;
-        const el = document.getElementById('apiResponse');
-        el.innerHTML = '<div class="status-text status-' + type + '"><pre style="margin:0;white-space:pre-wrap;word-break:break-all;">' + content + '</pre></div>';
-    }
-
-    // ============================================================
-    // DISPLAY FUNCTIONS
-    // ============================================================
-    function displayUserInfo(token) {
-        const data = decodeJwt(token);
-        if (data) {
-            document.getElementById('userId').innerText = data.sub || '-';
-            document.getElementById('userEmail').innerText = data.email || '-';
-            const roles = data['https://api-gateway-demo.com/roles'] || [];
-            userRole = roles.includes('admin') ? 'admin' : 'user';
-            document.getElementById('userRole').innerText = userRole;
-            document.getElementById('userInfo').style.display = 'block';
-            
-            // Hiển thị nút Admin cho mọi user
-            document.getElementById('adminBtn').style.display = 'inline-block';
-        }
-    }
-
-    // ============================================================
-    // AUTH0 LOGIN
-    // ============================================================
-    document.getElementById('loginBtn').onclick = async () => {
-        const verifier = generateCodeVerifier();
-        const challenge = await generateCodeChallenge(verifier);
-        sessionStorage.setItem('pkce_verifier', verifier);
-        savedVerifier = verifier;
-        const authUrl = 'https://' + AUTH0_DOMAIN + '/authorize' +
-            '?client_id=' + CLIENT_ID +
-            '&redirect_uri=' + encodeURIComponent(REDIRECT_URI) +
-            '&response_type=code' +
-            '&scope=openid profile email' +
-            '&code_challenge_method=S256' +
-            '&code_challenge=' + challenge +
-            '&prompt=login';
-        window.location.href = authUrl;
-    };
-
-    // ============================================================
-    // CALLBACK HANDLER
-    // ============================================================
-    async function handleCallback() {
-        const params = new URLSearchParams(window.location.search);
-        const code = params.get('code');
-        if (!code) return;
-
-        let verifier = sessionStorage.getItem('pkce_verifier');
-        if (!verifier) verifier = savedVerifier;
-        if (!verifier) {
-            document.getElementById('tokenDisplay').textContent = 'Error: PKCE verifier not found. Please login again.';
-            return;
-        }
-
-        const tokenUrl = 'https://' + AUTH0_DOMAIN + '/oauth/token';
-        const body = new URLSearchParams({
-            client_id: CLIENT_ID,
-            grant_type: 'authorization_code',
-            code: code,
-            redirect_uri: REDIRECT_URI,
-            code_verifier: verifier
-        });
-
-        try {
-            const resp = await fetch(tokenUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: body
-            });
-            const data = await resp.json();
-            if (data.id_token) {
-                idToken = data.id_token;
-                document.getElementById('tokenDisplay').textContent = JSON.stringify(data, null, 2);
-                document.getElementById('balanceBtn').disabled = false;
-                document.getElementById('transferBtn').disabled = false;
-                document.getElementById('withdrawBtn').disabled = false;
-                document.getElementById('adminBtn').disabled = false;
-                document.getElementById('logoutBtn').disabled = false;
-                document.getElementById('loginBtn').disabled = true;
-                displayUserInfo(idToken);
-                window.history.replaceState({}, document.title, window.location.pathname);
-
-                // Active session
-                const loginResp = await fetch(GATEWAY_URL + '/api/login', {
-                    method: 'POST',
-                    headers: { 'Authorization': 'Bearer ' + idToken }
-                });
-                const loginData = await loginResp.json();
-                console.log('Login session:', loginData);
-                
-                showResultArea('✅ Đăng nhập thành công', 'Bạn đã đăng nhập thành công. Hãy chọn chức năng bên dưới.', 'success');
-            } else {
-                document.getElementById('tokenDisplay').textContent = 'Error from Auth0:\n' + JSON.stringify(data, null, 2);
-            }
-        } catch (err) {
-            document.getElementById('tokenDisplay').textContent = 'Fetch error: ' + err.message;
-        }
-    }
-
-    // ============================================================
-    // XEM SO DU
-    // ============================================================
-    document.getElementById('balanceBtn').onclick = async () => {
-        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
-        showResultArea('💰 Đang lấy số dư...', 'Đang gọi API Account Service...', 'pending');
-
-        const timestamp = Math.floor(Date.now() / 1000).toString();
-        const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
-        const method = 'GET';
-        const path = '/api/account/ACC001';
-
-        try {
-            const signature = await generateHmacSignature(method, path, timestamp, nonce, '');
-            updateHmacStatus('pending', 'Đang gửi...');
-
-            const resp = await fetch(GATEWAY_URL + path, {
-                method: method,
-                headers: {
-                    'Authorization': 'Bearer ' + idToken,
-                    'X-Timestamp': timestamp,
-                    'X-Nonce': nonce,
-                    'X-Signature': signature
-                }
-            });
-            const data = await resp.json();
-            
-            if (data.balance !== undefined) {
-                const balanceHTML = 'Số dư: <span style="font-size:28px;font-weight:700;color:#003366;">' + data.balance.toLocaleString() + '</span> VND';
-                showResultArea('💰 Số dư tài khoản', balanceHTML, 'success');
-                updateHmacStatus('success', 'HMAC verified');
-            } else {
-                showResultArea('❌ Lỗi', JSON.stringify(data, null, 2), 'error');
-                updateHmacStatus('error', 'Không lấy được số dư');
-            }
-        } catch (err) {
-            showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
-            updateHmacStatus('error', 'Lỗi: ' + err.message);
-        }
-    };
-
-    // ============================================================
-    // CHUYỂN TIỀN
-    // ============================================================
-    document.getElementById('transferBtn').onclick = () => {
-        document.getElementById('transferForm').style.display = 'block';
-        document.getElementById('withdrawForm').style.display = 'none';
-        document.getElementById('adminPanel').style.display = 'none';
-        document.getElementById('resultArea').style.display = 'none';
-        showResultArea('💸 Chuyển tiền', 'Vui lòng nhập thông tin bên dưới và ấn "Xác nhận"', 'pending');
-    };
-
-    document.getElementById('doTransferBtn').onclick = async () => {
-        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
-        const fromAccount = document.getElementById('fromAccount').value;
-        const toAccount = document.getElementById('toAccount').value;
-        const amount = parseFloat(document.getElementById('transferAmount').value);
-        const description = document.getElementById('transferDesc').value || 'Chuyển tiền';
-
-        if (!toAccount || !amount || amount <= 0) {
-            showResultArea('❌ Lỗi', 'Vui lòng nhập đầy đủ thông tin', 'error');
-            return;
-        }
-
-        showResultArea('💸 Đang chuyển tiền...', 'Đang gọi Transfer Service...', 'pending');
-        const timestamp = Math.floor(Date.now() / 1000).toString();
-        const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
-        const method = 'POST';
-        const path = '/api/transfer/transfer';
-        const body = JSON.stringify({ from_account: fromAccount, to_account: toAccount, amount: amount, description: description });
-
-        try {
-            const signature = await generateHmacSignature(method, path, timestamp, nonce, body);
-            const resp = await fetch(GATEWAY_URL + path, {
-                method: method,
-                headers: {
-                    'Authorization': 'Bearer ' + idToken,
-                    'Content-Type': 'application/json',
-                    'X-Timestamp': timestamp,
-                    'X-Nonce': nonce,
-                    'X-Signature': signature
-                },
-                body: body
-            });
-            const data = await resp.json();
-            if (data.status === 'completed') {
-                showResultArea('✅ Chuyển tiền thành công!', JSON.stringify(data, null, 2), 'success');
-                document.getElementById('transferAmount').value = '';
-                document.getElementById('toAccount').value = '';
-            } else {
-                showResultArea('❌ Chuyển tiền thất bại', JSON.stringify(data, null, 2), 'error');
-            }
-        } catch (err) {
-            showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
-        }
-    };
-
-    // ============================================================
-    // RÚT TIỀN
-    // ============================================================
-    document.getElementById('withdrawBtn').onclick = () => {
-        document.getElementById('withdrawForm').style.display = 'block';
-        document.getElementById('transferForm').style.display = 'none';
-        document.getElementById('adminPanel').style.display = 'none';
-        document.getElementById('resultArea').style.display = 'none';
-        showResultArea('🏧 Rút tiền', 'Vui lòng nhập số tiền và ấn "Xác nhận"', 'pending');
-    };
-
-    document.getElementById('doWithdrawBtn').onclick = async () => {
-        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
-        const accountId = document.getElementById('withdrawAccount').value;
-        const amount = parseFloat(document.getElementById('withdrawAmount').value);
-        const description = document.getElementById('transferDesc').value || 'Rút tiền ATM';
-
-        if (!amount || amount <= 0) {
-            showResultArea('❌ Lỗi', 'Vui lòng nhập số tiền', 'error');
-            return;
-        }
-
-        showResultArea('🏧 Đang rút tiền...', 'Đang gọi Transfer Service...', 'pending');
-        const timestamp = Math.floor(Date.now() / 1000).toString();
-        const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
-        const method = 'POST';
-        const path = '/api/transfer/withdraw';
-        const body = JSON.stringify({ account_id: accountId, amount: amount, description: description });
-
-        try {
-            const signature = await generateHmacSignature(method, path, timestamp, nonce, body);
-            const resp = await fetch(GATEWAY_URL + path, {
-                method: method,
-                headers: {
-                    'Authorization': 'Bearer ' + idToken,
-                    'Content-Type': 'application/json',
-                    'X-Timestamp': timestamp,
-                    'X-Nonce': nonce,
-                    'X-Signature': signature
-                },
-                body: body
-            });
-            const data = await resp.json();
-            if (data.message === 'Withdrawal successful') {
-                showResultArea('✅ Rút tiền thành công!', JSON.stringify(data, null, 2), 'success');
-                document.getElementById('withdrawAmount').value = '';
-            } else {
-                showResultArea('❌ Rút tiền thất bại', JSON.stringify(data, null, 2), 'error');
-            }
-        } catch (err) {
-            showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
-        }
-    };
-
-    // ============================================================
-    // ADMIN PANEL - LUÔN HIỂN THỊ NHƯNG KIỂM TRA ROLE
-    // ============================================================
-    document.getElementById('adminBtn').onclick = () => {
-        if (userRole !== 'admin') {
-            showResultArea('⛔ Truy cập bị từ chối', 'Bạn không có quyền truy cập Admin Panel. Yêu cầu role: admin', 'error');
-            document.getElementById('adminPanel').style.display = 'none';
-            return;
-        }
-        document.getElementById('adminPanel').style.display = 'block';
-        document.getElementById('transferForm').style.display = 'none';
-        document.getElementById('withdrawForm').style.display = 'none';
-        document.getElementById('resultArea').style.display = 'none';
-        showResultArea('⚙️ Admin Panel', 'Chọn chức năng bên dưới', 'pending');
-    };
-
-    document.getElementById('listUsersBtn').onclick = async () => {
-        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
-        if (userRole !== 'admin') {
-            showResultArea('⛔ Truy cập bị từ chối', 'Bạn không có quyền truy cập Admin Panel', 'error');
-            return;
-        }
-        showResultArea('📋 Danh sách users', 'Đang tải...', 'pending');
-        const timestamp = Math.floor(Date.now() / 1000).toString();
-        const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
-        const method = 'GET';
-        const path = '/api/admin/users';
-
-        try {
-            const signature = await generateHmacSignature(method, path, timestamp, nonce, '');
-            const resp = await fetch(GATEWAY_URL + path, {
-                method: method,
-                headers: {
-                    'Authorization': 'Bearer ' + idToken,
-                    'X-Timestamp': timestamp,
-                    'X-Nonce': nonce,
-                    'X-Signature': signature
-                }
-            });
-            const data = await resp.json();
-            showResultArea('📋 Danh sách users', JSON.stringify(data, null, 2), 'success');
-        } catch (err) {
-            showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
-        }
-    };
-
-    document.getElementById('deleteUserBtn').onclick = async () => {
-        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
-        if (userRole !== 'admin') {
-            showResultArea('⛔ Truy cập bị từ chối', 'Bạn không có quyền truy cập Admin Panel', 'error');
-            return;
-        }
-        const userId = prompt('Nhập user ID cần xóa:');
-        if (!userId) return;
-        showResultArea('🗑️ Đang xóa user ' + userId, 'Đang gọi Admin Service...', 'pending');
-        const timestamp = Math.floor(Date.now() / 1000).toString();
-        const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
-        const method = 'DELETE';
-        const path = '/api/admin/users/' + userId;
-
-        try {
-            const signature = await generateHmacSignature(method, path, timestamp, nonce, '');
-            const resp = await fetch(GATEWAY_URL + path, {
-                method: method,
-                headers: {
-                    'Authorization': 'Bearer ' + idToken,
-                    'X-Timestamp': timestamp,
-                    'X-Nonce': nonce,
-                    'X-Signature': signature
-                }
-            });
-            const data = await resp.json();
-            showResultArea('🗑️ Kết quả xóa user', JSON.stringify(data, null, 2), 'success');
-        } catch (err) {
-            showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
-        }
-    };
-
-    // ============================================================
-    // LOGOUT
-    // ============================================================
-    document.getElementById('logoutBtn').onclick = async () => {
-        if (idToken) {
-            await fetch(GATEWAY_URL + '/api/revoke', {
-                method: 'POST',
-                headers: { 'Authorization': 'Bearer ' + idToken }
-            });
-        }
-        idToken = null;
-        document.getElementById('tokenDisplay').textContent = '(đã đăng xuất)';
-        document.getElementById('balanceBtn').disabled = true;
-        document.getElementById('transferBtn').disabled = true;
-        document.getElementById('withdrawBtn').disabled = true;
-        document.getElementById('adminBtn').disabled = true;
-        document.getElementById('logoutBtn').disabled = true;
-        document.getElementById('loginBtn').disabled = false;
-        document.getElementById('userInfo').style.display = 'none';
-        document.getElementById('resultArea').style.display = 'none';
-        document.getElementById('transferForm').style.display = 'none';
-        document.getElementById('withdrawForm').style.display = 'none';
-        document.getElementById('adminPanel').style.display = 'none';
-        sessionStorage.removeItem('pkce_verifier');
-        savedVerifier = null;
-        updateHmacStatus('info', 'Đã đăng xuất');
-        showResultArea('🚪 Đã đăng xuất', 'Bạn đã đăng xuất thành công', 'info');
-        const logoutUrl = 'https://' + AUTH0_DOMAIN + '/v2/logout?returnTo=' + encodeURIComponent(REDIRECT_URI) + '&federated';
-        window.location.href = logoutUrl;
-    };
-
-    // ============================================================
-    // INIT
-    // ============================================================
     if (hasCode) {
         handleCallback();
     } else {
