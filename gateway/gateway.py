@@ -125,6 +125,9 @@ async def gateway(request: Request, service: str, path: str):
             body_bytes = await request.body()
             body_str = body_bytes.decode() if body_bytes else ""
             
+           # ===== GỬI REQUEST ĐẾN AUTH SERVER =====
+            method = request.method  # GET, POST, PUT, DELETE
+            
             auth_headers = {
                 "Authorization": authorization,
                 "Content-Type": "application/json",
@@ -132,7 +135,8 @@ async def gateway(request: Request, service: str, path: str):
                 "X-Timestamp": x_timestamp,
                 "X-Nonce": x_nonce,
                 "X-Signature": x_signature,
-                "X-Original-Path": f"/api/{service}/{path}"
+                "X-Original-Path": f"/api/{service}/{path}",
+                "X-Original-Method": method  # ✅ Thêm method
             }
             
             logger.info(f"🔑 Sending to Auth: /api/{service}/{path}")
