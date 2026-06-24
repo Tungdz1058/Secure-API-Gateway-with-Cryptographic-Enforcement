@@ -151,7 +151,9 @@ async def verify_endpoint(
     x_signature: str = Header(None),
     x_required_role: str = Header(None),
 ):
+    # ✅ Khởi tạo biến
     hmac_verified = False
+    
     # ===== 1. JWT VERIFICATION =====
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Authorization header")
@@ -167,53 +169,45 @@ async def verify_endpoint(
         raise e
 
     # ===== 2. HMAC VERIFICATION =====
-        hmac_verified = False
-        
-        # ✅ Kiểm tra HMAC headers
-        if not x_timestamp or not x_nonce or not x_signature:
-            raise HTTPException(status_code=401, detail="Missing HMAC headers")
-        
-        # ✅ Verify timestamp
-        try:
-            ts = int(x_timestamp)
-            now = int(datetime.now(timezone.utc).timestamp())
-            if abs(now - ts) > 60:
-                raise HTTPException(status_code=401, detail="Timestamp expired")
-        except ValueError:
-            raise HTTPException(status_code=401, detail="Invalid timestamp")
-        
-        # ✅ Verify nonce
-        if USE_REDIS:
-            if redis_client.get(x_nonce):
-                raise HTTPException(status_code=401, detail="Nonce already used")
-            redis_client.set(x_nonce, "1", ex=120)
-        else:
-            if x_nonce in nonce_store:
-                raise HTTPException(status_code=401, detail="Nonce already used")
-            nonce_store[x_nonce] = True
-        
-        # ✅ Tính HMAC
-        body_bytes = await request.body()
-        body_str = body_bytes.decode() if body_bytes else ""
-        
-        original_method = request.headers.get("x-original-method", request.method)
-        original_path = request.headers.get("x-original-path", request.url.path)
-        
-        print(f"✅ Using original method: {original_method}")
-        print(f"✅ Using original path: {original_path}")
-        
-        canonical = f"{original_method}|{original_path}|{x_timestamp}|{x_nonce}|{body_str}"
-        print(f"🔑 Canonical: {canonical}")
-        
-        hmac_secret = get_hmac_secret()
-        expected = hmac.new(hmac_secret, canonical.encode(), hashlib.sha256).hexdigest()
-        print(f"🔑 Expected: {expected}")
-        
-        if not hmac.compare_digest(expected, x_signature):
-            print(f"❌ Received: {x_signature}")
-            raise HTTPException(status_code=401, detail="Invalid HMAC signature")
-        
-        hmac_verified = True
+    # ✅ BẮT BUỘC HMAC HEADERS
+    if not x_timestamp or not x_nonce or not x_signature:
+        raise HTTPException(status_code=401, detail="Missing HMAC headers")
+
+    # ✅ TIMESTAMP
+    try:
+        ts = int(x_timestamp)
+        now = int(datetime.now(timezone.utc).timestamp())
+        if abs(now - ts) > 60:
+            raise HTTPException(status_code=401, detail="Timestamp expired")
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid timestamp")
+
+    # ✅ NONCE
+    if USE_REDIS:
+        if redis_client.get(x_nonce):
+            raise HTTPException(status_code=401, detail="Nonce already used")
+        redis_client.set(x_nonce, "1", ex=120)
+    else:
+        if x_nonce in nonce_store:
+            raise HTTPException(status_code=401, detail="Nonce already used")
+        nonce_store[x_nonce] = True
+
+    # ✅ HMAC
+    body_bytes = await request.body()
+    body_str = body_bytes.decode() if body_bytes else ""
+
+    original_method = request.headers.get("x-original-method", request.method)
+    original_path = request.headers.get("x-original-path", request.url.path)
+
+    canonical = f"{original_method}|{original_path}|{x_timestamp}|{x_nonce}|{body_str}"
+
+    hmac_secret = get_hmac_secret()
+    expected = hmac.new(hmac_secret, canonical.encode(), hashlib.sha256).hexdigest()
+
+    if not hmac.compare_digest(expected, x_signature):
+        raise HTTPException(status_code=401, detail="Invalid HMAC signature")
+
+    hmac_verified = True
 
     # ===== 3. ROLE VERIFICATION =====
     if x_required_role:
