@@ -12,10 +12,12 @@ logger = logging.getLogger("gateway")
 
 app = FastAPI(title="API Gateway")
 
+# ========== CORS - CHO PHÉP VERCEL ==========
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "https://secure-api-gateway-with-cryptograph.vercel.app",
         "https://secure-api-gateway-with-cryptograph.vercel.app",
         "https://*.vercel.app"
     ],
@@ -66,11 +68,16 @@ def set_cached_roles(token: str, roles: list, ttl: int = CACHE_TTL):
     }
 
 # ========== AUTH SERVICE CALL ==========
-async def call_auth_service_with_retry(auth_url: str, headers: dict, max_retries: int = MAX_RETRIES):
+async def call_auth_service_with_retry(auth_url: str, headers: dict, body: str = "", max_retries: int = MAX_RETRIES):
     async with httpx.AsyncClient() as client:
         for attempt in range(max_retries):
             try:
-                response = await client.post(auth_url, headers=headers, timeout=5.0)
+                response = await client.post(
+                    auth_url,
+                    headers=headers,
+                    content=body,
+                    timeout=5.0
+                )
                 if response.status_code == 429:
                     await asyncio.sleep(2 ** attempt)
                     continue
@@ -115,7 +122,6 @@ async def gateway(request: Request, service: str, path: str):
             x_nonce = request.headers.get("x-nonce", "")
             x_signature = request.headers.get("x-signature", "")
             
-            # ✅ Lấy body
             body_bytes = await request.body()
             body_str = body_bytes.decode() if body_bytes else ""
             
@@ -129,15 +135,10 @@ async def gateway(request: Request, service: str, path: str):
                 "X-Original-Path": f"/api/{service}/{path}"
             }
             
-            logger.info(f"🔑 Sending original path: /api/{service}/{path}")
-            logger.info(f"🔑 Body: {body_str}")
+            logger.info(f"🔑 Sending to Auth: /api/{service}/{path}")
             
             auth_url = f"{SERVICE_MAP['auth']}/auth/verify"
-            verify_response = await call_auth_service_with_retry(
-                auth_url,
-                headers=auth_headers,
-                body=body_str  # ✅ Forward body
-            )
+            verify_response = await call_auth_service_with_retry(auth_url, auth_headers, body_str)
             
             if verify_response is None or verify_response.status_code != 200:
                 error_detail = "Authentication failed"
@@ -174,11 +175,11 @@ async def gateway(request: Request, service: str, path: str):
                 timeout=10.0
             )
             
-            content_type = response.headers.get("content-type", "")
-            if "application/json" in content_type:
+            # ✅ Luôn trả về JSON
+            try:
                 return response.json()
-            else:
-                return {"error": "Service returned non-JSON response", "status": response.status_code}
+            except:
+                return {"error": "Service error", "status": response.status_code}
         except httpx.ConnectError:
             raise HTTPException(status_code=503, detail=f"Service {service} unavailable")
 
