@@ -12,12 +12,11 @@ logger = logging.getLogger("gateway")
 
 app = FastAPI(title="API Gateway")
 
-# ========== CORS - CHO PHÉP VERCEL ==========
+# ========== CORS ==========
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "https://secure-api-gateway-with-cryptograph.vercel.app",
         "https://secure-api-gateway-with-cryptograph.vercel.app",
         "https://*.vercel.app"
     ],
@@ -50,20 +49,29 @@ PREFIX_SERVICES = ["auth"]
 # ========== CACHE ==========
 role_cache = {}
 
-def get_cached_roles(token: str) -> list:
+def get_cached_roles(token: str):
+    """Returns (roles, hmac_verified, jwt_verified, session_active) or (None, None, None, None)"""
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     if token_hash in role_cache:
         cache_entry = role_cache[token_hash]
         if time.time() < cache_entry["expiry"]:
-            return cache_entry["roles"]
+            return (
+                cache_entry.get("roles", []),
+                cache_entry.get("hmac_verified", False),
+                cache_entry.get("jwt_verified", False),
+                cache_entry.get("session_active", False)
+            )
         else:
             del role_cache[token_hash]
-    return None
+    return None, None, None, None
 
-def set_cached_roles(token: str, roles: list, ttl: int = CACHE_TTL):
+def set_cached_roles(token: str, roles: list, hmac_verified: bool = True, jwt_verified: bool = True, session_active: bool = True, ttl: int = CACHE_TTL):
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     role_cache[token_hash] = {
         "roles": roles,
+        "hmac_verified": hmac_verified,
+        "jwt_verified": jwt_verified,
+        "session_active": session_active,
         "expiry": time.time() + ttl
     }
 
@@ -92,7 +100,7 @@ async def call_auth_service_with_retry(auth_url: str, headers: dict, body: str =
                 await asyncio.sleep(2)
     return None
 
-# ========== ROUTE ==========
+# ========== MAIN ROUTE ==========
 @app.api_route("/api/{service}/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def gateway(request: Request, service: str, path: str):
     service_url = SERVICE_MAP.get(service)
@@ -101,6 +109,7 @@ async def gateway(request: Request, service: str, path: str):
     
     logger.info(f"📨 Request: {request.method} /api/{service}/{path}")
     
+    # ===== AUTHENTICATION & AUTHORIZATION =====
     if service in ROLE_REQUIREMENTS:
         authorization = request.headers.get("authorization")
         if not authorization:
@@ -113,11 +122,25 @@ async def gateway(request: Request, service: str, path: str):
         required_roles = ROLE_REQUIREMENTS[service]
         required_role = required_roles[0]
         
-        cached_roles = get_cached_roles(token)
+        # ===== CHECK CACHE =====
+        cached_roles, cached_hmac, cached_jwt, cached_session = get_cached_roles(token)
         if cached_roles is not None:
+            logger.info(f"✅ Cache hit for token")
+            
+            # Kiểm tra tất cả điều kiện từ cache
+            if not cached_jwt:
+                raise HTTPException(status_code=401, detail="JWT verification failed")
+            if not cached_hmac:
+                raise HTTPException(status_code=401, detail="Invalid HMAC signature")
+            if not cached_session:
+                raise HTTPException(status_code=401, detail="Session not active - please login")
             if not any(role in cached_roles for role in required_roles):
                 raise HTTPException(status_code=403, detail=f"Role required: {required_roles}")
+            
+            # Cache valid, skip auth verification
+            logger.info(f"✅ Cache valid, skipping auth verification")
         else:
+            # ===== CALL AUTH SERVICE =====
             x_timestamp = request.headers.get("x-timestamp", "")
             x_nonce = request.headers.get("x-nonce", "")
             x_signature = request.headers.get("x-signature", "")
@@ -129,8 +152,7 @@ async def gateway(request: Request, service: str, path: str):
             body_bytes = await request.body()
             body_str = body_bytes.decode() if body_bytes else ""
             
-           # ===== GỬI REQUEST ĐẾN AUTH SERVER =====
-            method = request.method  # GET, POST, PUT, DELETE
+            method = request.method
             
             auth_headers = {
                 "Authorization": authorization,
@@ -140,10 +162,10 @@ async def gateway(request: Request, service: str, path: str):
                 "X-Nonce": x_nonce,
                 "X-Signature": x_signature,
                 "X-Original-Path": f"/api/{service}/{path}",
-                "X-Original-Method": method  # ✅ Thêm method
+                "X-Original-Method": method
             }
             
-            logger.info(f"🔑 Sending to Auth: /api/{service}/{path}")
+            logger.info(f"🔑 Sending to Auth Service for verification")
             
             auth_url = f"{SERVICE_MAP['auth']}/auth/verify"
             verify_response = await call_auth_service_with_retry(auth_url, auth_headers, body_str)
@@ -158,11 +180,29 @@ async def gateway(request: Request, service: str, path: str):
                 raise HTTPException(status_code=403, detail=error_detail)
             
             verify_data = verify_response.json()
-            roles = verify_data.get("roles", [])
-            set_cached_roles(token, roles, ttl=CACHE_TTL)
+            logger.info(f"✅ Auth response: {verify_data}")
             
+            # ===== EXTRACT AND VALIDATE =====
+            hmac_verified = verify_data.get("hmac_verified", False)
+            jwt_verified = verify_data.get("jwt_verified", False)
+            session_active = verify_data.get("session_active", False)
+            roles = verify_data.get("roles", [])
+            
+            # Lưu vào cache
+            set_cached_roles(token, roles, hmac_verified, jwt_verified, session_active)
+            
+            # Kiểm tra tất cả điều kiện
+            if not jwt_verified:
+                raise HTTPException(status_code=401, detail="JWT verification failed")
+            if not hmac_verified:
+                logger.warning(f"❌ HMAC verification failed for request: {request.method} /api/{service}/{path}")
+                raise HTTPException(status_code=401, detail="Invalid HMAC signature")
+            if not session_active:
+                raise HTTPException(status_code=401, detail="Session not active - please login")
             if not any(role in roles for role in required_roles):
                 raise HTTPException(status_code=403, detail=f"Role required: {required_roles}")
+            
+            logger.info(f"✅ All verifications passed")
     
     # ===== FORWARD REQUEST =====
     if service in PREFIX_SERVICES:
@@ -183,7 +223,6 @@ async def gateway(request: Request, service: str, path: str):
                 timeout=10.0
             )
             
-            # ✅ Luôn trả về JSON
             try:
                 return response.json()
             except:
@@ -194,7 +233,27 @@ async def gateway(request: Request, service: str, path: str):
 # ========== HEALTH CHECK ==========
 @app.get("/health")
 async def health():
-    return {"status": "ok", "services": list(SERVICE_MAP.keys()), "cache_size": len(role_cache)}
+    return {
+        "status": "ok",
+        "services": list(SERVICE_MAP.keys()),
+        "cache_size": len(role_cache)
+    }
+
+@app.get("/cache/stats")
+async def cache_stats():
+    """Debug endpoint to view cache statistics"""
+    return {
+        "cache_size": len(role_cache),
+        "cache_entries": [
+            {
+                "token_hash": k,
+                "roles": v.get("roles", []),
+                "hmac_verified": v.get("hmac_verified", False),
+                "expiry": v.get("expiry", 0)
+            }
+            for k, v in list(role_cache.items())[:10]  # Show first 10 entries
+        ]
+    }
 
 if __name__ == "__main__":
     import uvicorn
