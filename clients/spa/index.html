@@ -229,13 +229,12 @@
 
 <script>
     // ============================================================
-    // CONFIG
+    // CONFIG - CHỈ GỌI QUA GATEWAY
     // ============================================================
     const AUTH0_DOMAIN = 'apigatewaysecure.us.auth0.com';
     const CLIENT_ID = '5GkSY8Xk4oNRpJysIWx35UCyeInC0Vs3';
     const REDIRECT_URI = window.location.origin;
     const GATEWAY_URL = 'https://bank-gateway-khpy.onrender.com';
-    const API_URL = GATEWAY_URL + '/api';
 
     let idToken = null;
     let savedVerifier = null;
@@ -252,6 +251,9 @@
         savedVerifier = sessionStorage.getItem('pkce_verifier');
     }
 
+    // ============================================================
+    // PKCE HELPERS
+    // ============================================================
     function generateCodeVerifier() {
         const array = new Uint8Array(32);
         crypto.getRandomValues(array);
@@ -266,6 +268,9 @@
             .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
     }
 
+    // ============================================================
+    // JWT DECODE
+    // ============================================================
     function decodeJwt(token) {
         try {
             const parts = token.split('.');
@@ -276,6 +281,9 @@
         } catch(e) { return null; }
     }
 
+    // ============================================================
+    // HMAC HELPERS
+    // ============================================================
     const HMAC_SECRET = 'my-secret-key-change-in-production';
 
     async function generateHmacSignature(method, path, timestamp, nonce, body) {
@@ -323,12 +331,11 @@
         el.innerHTML = '<div class="status-text status-' + type + '"><pre style="margin:0;white-space:pre-wrap;word-break:break-all;">' + content + '</pre></div>';
     }
 
-    function displayUserInfo(token) {
-        const data = decodeJwt(token);
+    function displayUserInfoFromGateway(data) {
         if (data) {
-            document.getElementById('userId').innerText = data.sub || '-';
+            document.getElementById('userId').innerText = data.user || '-';
             document.getElementById('userEmail').innerText = data.email || '-';
-            const roles = data['https://api-gateway-demo.com/roles'] || [];
+            const roles = data.roles || [];
             userRole = roles.includes('admin') ? 'admin' : 'user';
             document.getElementById('userRole').innerText = userRole;
             document.getElementById('userInfo').style.display = 'block';
@@ -336,6 +343,9 @@
         }
     }
 
+    // ============================================================
+    // AUTH0 LOGIN - LẤY TOKEN TỪ AUTH0
+    // ============================================================
     document.getElementById('loginBtn').onclick = async () => {
         const verifier = generateCodeVerifier();
         const challenge = await generateCodeChallenge(verifier);
@@ -352,6 +362,9 @@
         window.location.href = authUrl;
     };
 
+    // ============================================================
+    // CALLBACK - ĐỔI CODE LẤY TOKEN, SAU ĐÓ GỌI /api/auth/verify QUA GATEWAY
+    // ============================================================
     async function handleCallback() {
         const params = new URLSearchParams(window.location.search);
         const code = params.get('code');
@@ -364,6 +377,7 @@
             return;
         }
 
+        // 1. Lấy token từ Auth0
         const tokenUrl = 'https://' + AUTH0_DOMAIN + '/oauth/token';
         const body = new URLSearchParams({
             client_id: CLIENT_ID,
@@ -383,22 +397,37 @@
             if (data.id_token) {
                 idToken = data.id_token;
                 document.getElementById('tokenDisplay').textContent = JSON.stringify(data, null, 2);
-                document.getElementById('balanceBtn').disabled = false;
-                document.getElementById('transferBtn').disabled = false;
-                document.getElementById('withdrawBtn').disabled = false;
-                document.getElementById('adminBtn').disabled = false;
-                document.getElementById('logoutBtn').disabled = false;
-                document.getElementById('loginBtn').disabled = true;
-                displayUserInfo(idToken);
-                window.history.replaceState({}, document.title, window.location.pathname);
 
-                const loginResp = await fetch(GATEWAY_URL + '/api/login', {
+                // 2. Gửi token qua Gateway để Auth Service verify
+                const verifyResp = await fetch(GATEWAY_URL + '/api/auth/verify', {
                     method: 'POST',
-                    headers: { 'Authorization': 'Bearer ' + idToken }
+                    headers: {
+                        'Authorization': 'Bearer ' + idToken,
+                        'Content-Type': 'application/json'
+                    }
                 });
-                const loginData = await loginResp.json();
-                console.log('Login session:', loginData);
-                showResultArea('✅ Đăng nhập thành công', 'Bạn đã đăng nhập thành công. Hãy chọn chức năng bên dưới.', 'success');
+                const verifyData = await verifyResp.json();
+
+                if (verifyResp.status === 200) {
+                    // 3. Xác thực thành công - hiển thị user info
+                    displayUserInfoFromGateway(verifyData);
+                    document.getElementById('balanceBtn').disabled = false;
+                    document.getElementById('transferBtn').disabled = false;
+                    document.getElementById('withdrawBtn').disabled = false;
+                    document.getElementById('adminBtn').disabled = false;
+                    document.getElementById('logoutBtn').disabled = false;
+                    document.getElementById('loginBtn').disabled = true;
+                    showResultArea('✅ Đăng nhập thành công', 'Xác thực qua Gateway - Auth Service thành công', 'success');
+                    
+                    // Active session qua Gateway
+                    await fetch(GATEWAY_URL + '/api/auth/login', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + idToken }
+                    });
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                } else {
+                    showResultArea('❌ Xác thực thất bại', JSON.stringify(verifyData, null, 2), 'error');
+                }
             } else {
                 document.getElementById('tokenDisplay').textContent = 'Error from Auth0:\n' + JSON.stringify(data, null, 2);
             }
@@ -407,9 +436,12 @@
         }
     }
 
+    // ============================================================
+    // XEM SO DƯ - QUA GATEWAY
+    // ============================================================
     document.getElementById('balanceBtn').onclick = async () => {
         if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
-        showResultArea('💰 Đang lấy số dư...', 'Đang gọi API Account Service...', 'pending');
+        showResultArea('💰 Đang lấy số dư...', 'Đang gọi API qua Gateway...', 'pending');
 
         const timestamp = Math.floor(Date.now() / 1000).toString();
         const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
@@ -445,6 +477,9 @@
         }
     };
 
+    // ============================================================
+    // CHUYỂN TIỀN - QUA GATEWAY
+    // ============================================================
     document.getElementById('transferBtn').onclick = () => {
         document.getElementById('transferForm').style.display = 'block';
         document.getElementById('withdrawForm').style.display = 'none';
@@ -465,7 +500,7 @@
             return;
         }
 
-        showResultArea('💸 Đang chuyển tiền...', 'Đang gọi Transfer Service...', 'pending');
+        showResultArea('💸 Đang chuyển tiền...', 'Đang gọi Transfer Service qua Gateway...', 'pending');
         const timestamp = Math.floor(Date.now() / 1000).toString();
         const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
         const method = 'POST';
@@ -498,6 +533,9 @@
         }
     };
 
+    // ============================================================
+    // RÚT TIỀN - QUA GATEWAY
+    // ============================================================
     document.getElementById('withdrawBtn').onclick = () => {
         document.getElementById('withdrawForm').style.display = 'block';
         document.getElementById('transferForm').style.display = 'none';
@@ -517,7 +555,7 @@
             return;
         }
 
-        showResultArea('🏧 Đang rút tiền...', 'Đang gọi Transfer Service...', 'pending');
+        showResultArea('🏧 Đang rút tiền...', 'Đang gọi Transfer Service qua Gateway...', 'pending');
         const timestamp = Math.floor(Date.now() / 1000).toString();
         const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
         const method = 'POST';
@@ -549,54 +587,20 @@
         }
     };
 
-    document.getElementById('adminBtn').onclick = async () => {
-        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
-        
+    // ============================================================
+    // ADMIN PANEL - QUA GATEWAY
+    // ============================================================
+    document.getElementById('adminBtn').onclick = () => {
         if (userRole !== 'admin') {
             showResultArea('⛔ Truy cập bị từ chối', 'Bạn không có quyền truy cập Admin Panel. Yêu cầu role: admin', 'error');
             document.getElementById('adminPanel').style.display = 'none';
             return;
         }
-
-        showResultArea('⚙️ Admin Panel', 'Đang kiểm tra quyền truy cập...', 'pending');
-        
-        const timestamp = Math.floor(Date.now() / 1000).toString();
-        const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
-        const method = 'GET';
-        const path = '/api/admin/users';
-
-        try {
-            const signature = await generateHmacSignature(method, path, timestamp, nonce, '');
-            const resp = await fetch(GATEWAY_URL + path, {
-                method: method,
-                headers: {
-                    'Authorization': 'Bearer ' + idToken,
-                    'X-Timestamp': timestamp,
-                    'X-Nonce': nonce,
-                    'X-Signature': signature
-                }
-            });
-            
-            if (resp.status === 403) {
-                const data = await resp.json();
-                showResultArea('⛔ Truy cập bị từ chối', data.detail || 'Bạn không có quyền truy cập Admin Panel', 'error');
-                document.getElementById('adminPanel').style.display = 'none';
-                return;
-            }
-            
-            if (resp.status === 200) {
-                const data = await resp.json();
-                document.getElementById('adminPanel').style.display = 'block';
-                document.getElementById('transferForm').style.display = 'none';
-                document.getElementById('withdrawForm').style.display = 'none';
-                document.getElementById('resultArea').style.display = 'none';
-                showResultArea('⚙️ Admin Panel - Danh sách users', JSON.stringify(data, null, 2), 'success');
-            } else {
-                showResultArea('❌ Lỗi', 'Status: ' + resp.status, 'error');
-            }
-        } catch (err) {
-            showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
-        }
+        document.getElementById('adminPanel').style.display = 'block';
+        document.getElementById('transferForm').style.display = 'none';
+        document.getElementById('withdrawForm').style.display = 'none';
+        document.getElementById('resultArea').style.display = 'none';
+        showResultArea('⚙️ Admin Panel', 'Chọn chức năng bên dưới', 'pending');
     };
 
     document.getElementById('listUsersBtn').onclick = async () => {
@@ -622,11 +626,6 @@
                     'X-Signature': signature
                 }
             });
-            if (resp.status === 403) {
-                const data = await resp.json();
-                showResultArea('⛔ Truy cập bị từ chối', data.detail || 'Bạn không có quyền truy cập Admin Panel', 'error');
-                return;
-            }
             const data = await resp.json();
             showResultArea('📋 Danh sách users', JSON.stringify(data, null, 2), 'success');
         } catch (err) {
@@ -642,7 +641,7 @@
         }
         const userId = prompt('Nhập user ID cần xóa:');
         if (!userId) return;
-        showResultArea('🗑️ Đang xóa user ' + userId, 'Đang gọi Admin Service...', 'pending');
+        showResultArea('🗑️ Đang xóa user ' + userId, 'Đang gọi Admin Service qua Gateway...', 'pending');
         const timestamp = Math.floor(Date.now() / 1000).toString();
         const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
         const method = 'DELETE';
@@ -666,9 +665,12 @@
         }
     };
 
+    // ============================================================
+    // LOGOUT - QUA GATEWAY
+    // ============================================================
     document.getElementById('logoutBtn').onclick = async () => {
         if (idToken) {
-            await fetch(GATEWAY_URL + '/api/revoke', {
+            await fetch(GATEWAY_URL + '/api/auth/revoke', {
                 method: 'POST',
                 headers: { 'Authorization': 'Bearer ' + idToken }
             });
@@ -694,6 +696,9 @@
         window.location.href = logoutUrl;
     };
 
+    // ============================================================
+    // INIT
+    // ============================================================
     if (hasCode) {
         handleCallback();
     } else {
