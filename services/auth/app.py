@@ -214,6 +214,11 @@ async def verify_endpoint(
             print(f"❌ Missing HMAC headers")
             raise HTTPException(status_code=401, detail="Missing HMAC headers")
         
+        # ✅ QUAN TRỌNG: Kiểm tra nonce TRƯỚC KHI tính HMAC
+        if is_nonce_used(x_nonce):
+            print(f"❌ Nonce already used: {x_nonce}")
+            raise HTTPException(status_code=401, detail="Nonce already used")
+        
         # Verify timestamp
         try:
             ts = int(x_timestamp)
@@ -224,13 +229,6 @@ async def verify_endpoint(
         except ValueError:
             print(f"❌ Invalid timestamp: {x_timestamp}")
             raise HTTPException(status_code=401, detail="Invalid timestamp")
-        
-        # Verify nonce (prevent replay attacks)
-        if is_nonce_used(x_nonce):
-            print(f"❌ Nonce already used: {x_nonce}")
-            raise HTTPException(status_code=401, detail="Nonce already used")
-        store_nonce(x_nonce)
-        print(f"✅ Nonce stored: {x_nonce}")
         
         # Tính HMAC
         body_bytes = await request.body()
@@ -253,10 +251,14 @@ async def verify_endpoint(
         print(f"🔑 Expected HMAC: {expected}")
         print(f"🔑 Received HMAC: {x_signature}")
         
-        # QUAN TRỌNG: So sánh và từ chối nếu sai
+        # So sánh HMAC
         if not hmac.compare_digest(expected, x_signature):
             print(f"❌ HMAC MISMATCH! Rejecting request")
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
+        
+        # ✅ LƯU NONCE SAU KHI HMAC ĐÚNG
+        store_nonce(x_nonce)
+        print(f"✅ Nonce stored: {x_nonce}")
         
         hmac_verified = True
         print(f"✅ HMAC verified successfully")
@@ -295,7 +297,6 @@ async def verify_endpoint(
     print(f"{'='*50}\n")
     
     return response_data
-
 @app.post("/auth/login")
 async def login_endpoint(authorization: str = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
