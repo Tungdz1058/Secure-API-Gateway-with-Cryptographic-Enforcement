@@ -29,6 +29,7 @@ if REDIS_URL:
         print("✅ Redis connected")
     except Exception as e:
         print(f"❌ Redis not available: {e}")
+        print("⚠️ Using in-memory storage instead")
 
 if not USE_REDIS:
     print("⚠️ Using in-memory storage (not persistent)")
@@ -36,6 +37,33 @@ if not USE_REDIS:
     revoked_tokens = set()
     active_sessions = {}
     kms_store = {}
+
+# ========== NONCE STORAGE FUNCTIONS ==========
+NONCE_EXPIRY = 120  # 120 seconds
+
+def store_nonce(nonce: str):
+    """Lưu nonce vào storage (Redis hoặc in-memory)"""
+    if USE_REDIS:
+        redis_client.setex(nonce, NONCE_EXPIRY, "1")
+    else:
+        nonce_store[nonce] = time.time()
+        cleanup_nonces()
+
+def is_nonce_used(nonce: str) -> bool:
+    """Kiểm tra nonce đã được sử dụng chưa"""
+    if USE_REDIS:
+        return redis_client.get(nonce) is not None
+    else:
+        cleanup_nonces()
+        return nonce in nonce_store
+
+def cleanup_nonces():
+    """Xóa nonce đã hết hạn (in-memory only)"""
+    if not USE_REDIS:
+        now = time.time()
+        expired = [n for n, t in nonce_store.items() if now - t > NONCE_EXPIRY]
+        for n in expired:
+            del nonce_store[n]
 
 # ========== FASTAPI APP ==========
 app = FastAPI(title="Auth Service")
@@ -198,16 +226,11 @@ async def verify_endpoint(
             raise HTTPException(status_code=401, detail="Invalid timestamp")
         
         # Verify nonce (prevent replay attacks)
-        if USE_REDIS:
-            if redis_client.get(x_nonce):
-                print(f"❌ Nonce already used: {x_nonce}")
-                raise HTTPException(status_code=401, detail="Nonce already used")
-            redis_client.set(x_nonce, "1", ex=120)
-        else:
-            if x_nonce in nonce_store:
-                print(f"❌ Nonce already used: {x_nonce}")
-                raise HTTPException(status_code=401, detail="Nonce already used")
-            nonce_store[x_nonce] = True
+        if is_nonce_used(x_nonce):
+            print(f"❌ Nonce already used: {x_nonce}")
+            raise HTTPException(status_code=401, detail="Nonce already used")
+        store_nonce(x_nonce)
+        print(f"✅ Nonce stored: {x_nonce}")
         
         # Tính HMAC
         body_bytes = await request.body()
@@ -265,7 +288,6 @@ async def verify_endpoint(
         "user": jwt_payload.get("sub"),
         "email": jwt_payload.get("email", jwt_payload.get("sub")),
         "roles": jwt_payload.get("https://api-gateway-demo.com/roles", []),
-        "session_active": session_active
     }
     
     print(f"✅ Auth verification successful")
@@ -324,17 +346,55 @@ async def health():
     return {
         "status": "ok",
         "service": "auth",
-        "redis": USE_REDIS
+        "redis": USE_REDIS,
+        "nonce_store_size": len(nonce_store) if not USE_REDIS else "redis"
     }
+
+# ============================================================
+# DEBUG ENDPOINTS
+# ============================================================
 
 @app.get("/auth/debug/nonce/{nonce}")
 async def debug_nonce(nonce: str):
     """Debug endpoint to check nonce status"""
+    return {
+        "nonce": nonce,
+        "exists": is_nonce_used(nonce),
+        "store_size": len(nonce_store) if not USE_REDIS else "redis"
+    }
+
+@app.get("/auth/debug/nonce-store")
+async def debug_nonce_store():
+    """Debug endpoint to show all nonces"""
     if USE_REDIS:
-        exists = redis_client.get(nonce) is not None
-    else:
-        exists = nonce in nonce_store
-    return {"nonce": nonce, "exists": exists}
+        return {"total": "redis", "nonces": [], "expiry_seconds": NONCE_EXPIRY}
+    
+    cleanup_nonces()
+    return {
+        "total": len(nonce_store),
+        "nonces": list(nonce_store.keys())[:10],
+        "expiry_seconds": NONCE_EXPIRY
+    }
+
+@app.get("/auth/debug/sessions")
+async def debug_sessions():
+    """Debug endpoint to show active sessions"""
+    if USE_REDIS:
+        return {"total": "redis", "sessions": []}
+    return {
+        "total": len(active_sessions),
+        "sessions": list(active_sessions.keys())[:10]
+    }
+
+@app.get("/auth/debug/revoked")
+async def debug_revoked():
+    """Debug endpoint to show revoked tokens"""
+    if USE_REDIS:
+        return {"total": "redis", "tokens": []}
+    return {
+        "total": len(revoked_tokens),
+        "tokens": list(revoked_tokens)[:10]
+    }
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5000)
