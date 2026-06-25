@@ -135,7 +135,7 @@
             <div class="info-row"><span class="info-label">User ID:</span><span class="info-value" id="userId"></span></div>
             <div class="info-row"><span class="info-label">Email:</span><span class="info-value" id="userEmail"></span></div>
             <div class="info-row"><span class="info-label">Role:</span><span class="info-value" id="userRole"></span></div>
-            <div class="info-row"><span class="info-label">Internal HMAC:</span><span class="info-value" id="hmacStatus"><span class="badge badge-info">Chưa gửi</span></span></div>
+            <div class="info-row"><span class="info-label">HMAC Status:</span><span class="info-value" id="hmacStatus"><span class="badge badge-info">Chưa gửi</span></span></div>
         </div>
 
         <div id="resultArea" class="card hidden">
@@ -215,7 +215,7 @@
     </div>
 
     <div class="footer">
-        <p><strong>Cryptographic Enforcement</strong> | JWT Auth0 + Gateway HMAC nội bộ | Nonce + Timestamp | Replay Protection</p>
+        <p><strong>Cryptographic Enforcement</strong> | JWT + HMAC | Nonce + Timestamp | Replay Protection</p>
         <p>Đại học Sư phạm Kỹ thuật TP.HCM (HCMUTE) - Khoa Công nghệ Thông tin</p>
     </div>
 </div>
@@ -258,8 +258,35 @@
             .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
     }
 
-    // HMAC secret không còn nằm ở frontend.
-    // Frontend chỉ gửi Auth0 Bearer token; Gateway sẽ tự ký HMAC nội bộ.
+    function decodeJwt(token) {
+        try {
+            const parts = token.split('.');
+            if (parts.length !== 3) return null;
+            const payload = parts[1];
+            const decoded = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+            return JSON.parse(decoded);
+        } catch(e) { return null; }
+    }
+
+    const HMAC_SECRET = 'my-secret-key-change-in-production';
+
+    async function generateHmacSignature(method, path, timestamp, nonce, body) {
+        const canonical = method + '|' + path + '|' + timestamp + '|' + nonce + '|' + body;
+        console.log('🔑 Canonical:', canonical);
+        const encoder = new TextEncoder();
+        const data = encoder.encode(canonical);
+        const key = await crypto.subtle.importKey(
+            'raw',
+            encoder.encode(HMAC_SECRET),
+            { name: 'HMAC', hash: 'SHA-256' },
+            false,
+            ['sign']
+        );
+        const sigBuffer = await crypto.subtle.sign('HMAC', key, data);
+        const sigArray = Array.from(new Uint8Array(sigBuffer));
+        return sigArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
     function updateHmacStatus(status, message) {
         const el = document.getElementById('hmacStatus');
         const badge = el.querySelector('.badge') || document.createElement('span');
@@ -277,7 +304,9 @@
             badge.className += ' badge-info';
             badge.textContent = message;
         }
-        if (!el.querySelector('.badge')) el.appendChild(badge);
+        if (!el.querySelector('.badge')) {
+            el.appendChild(badge);
+        }
     }
 
     function showResultArea(title, content, type) {
@@ -288,13 +317,15 @@
     }
 
     function displayUserInfoFromGateway(data) {
-        document.getElementById('userId').innerText = data.user || '-';
-        document.getElementById('userEmail').innerText = data.email || '-';
-        const roles = data.roles || [];
-        userRole = roles.includes('admin') ? 'admin' : 'user';
-        document.getElementById('userRole').innerText = userRole;
-        document.getElementById('userInfo').style.display = 'block';
-        document.getElementById('adminBtn').style.display = 'inline-block';
+        if (data) {
+            document.getElementById('userId').innerText = data.user || '-';
+            document.getElementById('userEmail').innerText = data.email || '-';
+            const roles = data.roles || [];
+            userRole = roles.includes('admin') ? 'admin' : 'user';
+            document.getElementById('userRole').innerText = userRole;
+            document.getElementById('userInfo').style.display = 'block';
+            document.getElementById('adminBtn').style.display = 'inline-block';
+        }
     }
 
     document.getElementById('loginBtn').onclick = async () => {
@@ -318,7 +349,8 @@
         const code = params.get('code');
         if (!code) return;
 
-        let verifier = sessionStorage.getItem('pkce_verifier') || savedVerifier;
+        let verifier = sessionStorage.getItem('pkce_verifier');
+        if (!verifier) verifier = savedVerifier;
         if (!verifier) {
             document.getElementById('tokenDisplay').textContent = 'Error: PKCE verifier not found. Please login again.';
             return;
@@ -340,65 +372,88 @@
                 body: body
             });
             const data = await resp.json();
+            if (data.id_token) {
+                idToken = data.id_token;
+                document.getElementById('tokenDisplay').textContent = JSON.stringify(data, null, 2);
 
-            if (!data.id_token) {
-                document.getElementById('tokenDisplay').textContent = 'Error from Auth0:\n' + JSON.stringify(data, null, 2);
-                return;
-            }
+                // Gọi Auth Service qua Gateway để verify
+                const timestamp = Math.floor(Date.now() / 1000).toString();
+                const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+                const signature = await generateHmacSignature('POST', '/api/auth/verify', timestamp, nonce, '');
 
-            idToken = data.id_token;
-            document.getElementById('tokenDisplay').textContent = JSON.stringify(data, null, 2);
+                const verifyResp = await fetch(GATEWAY_URL + '/api/auth/verify', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + idToken,
+                        'Content-Type': 'application/json',
+                        'X-Timestamp': timestamp,
+                        'X-Nonce': nonce,
+                        'X-Signature': signature
+                    }
+                });
+                const verifyData = await verifyResp.json();
 
-            // Đúng luồng: login trước để Auth Service tạo active session
-            const loginResp = await fetch(GATEWAY_URL + '/api/auth/login', {
-                method: 'POST',
-                headers: { 'Authorization': 'Bearer ' + idToken }
-            });
-            const loginData = await loginResp.json();
-
-            if (loginResp.status === 200) {
-                displayUserInfoFromGateway(loginData);
-                document.getElementById('balanceBtn').disabled = false;
-                document.getElementById('transferBtn').disabled = false;
-                document.getElementById('withdrawBtn').disabled = false;
-                document.getElementById('adminBtn').disabled = false;
-                document.getElementById('logoutBtn').disabled = false;
-                document.getElementById('loginBtn').disabled = true;
-                updateHmacStatus('success', 'Gateway ký HMAC nội bộ');
-                showResultArea('✅ Đăng nhập thành công', JSON.stringify(loginData, null, 2), 'success');
-                window.history.replaceState({}, document.title, window.location.pathname);
+                if (verifyResp.status === 200) {
+                    displayUserInfoFromGateway(verifyData);
+                    document.getElementById('balanceBtn').disabled = false;
+                    document.getElementById('transferBtn').disabled = false;
+                    document.getElementById('withdrawBtn').disabled = false;
+                    document.getElementById('adminBtn').disabled = false;
+                    document.getElementById('logoutBtn').disabled = false;
+                    document.getElementById('loginBtn').disabled = true;
+                    showResultArea('✅ Đăng nhập thành công', 'Xác thực qua Gateway - Auth Service thành công', 'success');
+                    
+                    await fetch(GATEWAY_URL + '/api/auth/login', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + idToken }
+                    });
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                } else {
+                    showResultArea('❌ Xác thực thất bại', JSON.stringify(verifyData, null, 2), 'error');
+                }
             } else {
-                showResultArea('❌ Đăng nhập thất bại', JSON.stringify(loginData, null, 2), 'error');
+                document.getElementById('tokenDisplay').textContent = 'Error from Auth0:\n' + JSON.stringify(data, null, 2);
             }
         } catch (err) {
             document.getElementById('tokenDisplay').textContent = 'Fetch error: ' + err.message;
         }
     }
 
-    async function callGateway(path, options = {}) {
-        if (!idToken) throw new Error('Vui lòng đăng nhập trước');
-        const headers = options.headers || {};
-        headers['Authorization'] = 'Bearer ' + idToken;
-        updateHmacStatus('pending', 'Gateway đang ký nội bộ...');
-        const resp = await fetch(GATEWAY_URL + path, { ...options, headers });
-        const data = await resp.json();
-        if (resp.ok) updateHmacStatus('success', 'Gateway HMAC verified');
-        else updateHmacStatus('error', data.detail || 'Request failed');
-        return { resp, data };
-    }
-
     document.getElementById('balanceBtn').onclick = async () => {
+        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
         showResultArea('💰 Đang lấy số dư...', 'Đang gọi API qua Gateway...', 'pending');
+
+        const timestamp = Math.floor(Date.now() / 1000).toString();
+        const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+        const method = 'GET';
+        const path = '/api/account/ACC001';
+
         try {
-            const { data } = await callGateway('/api/account/ACC001', { method: 'GET' });
+            const signature = await generateHmacSignature(method, path, timestamp, nonce, '');
+            updateHmacStatus('pending', 'Đang gửi...');
+
+            const resp = await fetch(GATEWAY_URL + path, {
+                method: method,
+                headers: {
+                    'Authorization': 'Bearer ' + idToken,
+                    'X-Timestamp': timestamp,
+                    'X-Nonce': nonce,
+                    'X-Signature': signature
+                }
+            });
+            const data = await resp.json();
+            
             if (data.balance !== undefined) {
                 const balanceHTML = 'Số dư: <span style="font-size:28px;font-weight:700;color:#003366;">' + data.balance.toLocaleString() + '</span> VND';
                 showResultArea('💰 Số dư tài khoản', balanceHTML, 'success');
+                updateHmacStatus('success', 'HMAC verified');
             } else {
                 showResultArea('❌ Lỗi', JSON.stringify(data, null, 2), 'error');
+                updateHmacStatus('error', 'Không lấy được số dư');
             }
         } catch (err) {
             showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
+            updateHmacStatus('error', 'Lỗi: ' + err.message);
         }
     };
 
@@ -411,6 +466,7 @@
     };
 
     document.getElementById('doTransferBtn').onclick = async () => {
+        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
         const fromAccount = document.getElementById('fromAccount').value;
         const toAccount = document.getElementById('toAccount').value;
         const amount = parseFloat(document.getElementById('transferAmount').value);
@@ -422,14 +478,26 @@
         }
 
         showResultArea('💸 Đang chuyển tiền...', 'Đang gọi Transfer Service qua Gateway...', 'pending');
+        const timestamp = Math.floor(Date.now() / 1000).toString();
+        const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+        const method = 'POST';
+        const path = '/api/transfer/transfer';
         const body = JSON.stringify({ from_account: fromAccount, to_account: toAccount, amount: amount, description: description });
 
         try {
-            const { data } = await callGateway('/api/transfer/transfer', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+            const signature = await generateHmacSignature(method, path, timestamp, nonce, body);
+            const resp = await fetch(GATEWAY_URL + path, {
+                method: method,
+                headers: {
+                    'Authorization': 'Bearer ' + idToken,
+                    'Content-Type': 'application/json',
+                    'X-Timestamp': timestamp,
+                    'X-Nonce': nonce,
+                    'X-Signature': signature
+                },
                 body: body
             });
+            const data = await resp.json();
             if (data.status === 'completed') {
                 showResultArea('✅ Chuyển tiền thành công!', JSON.stringify(data, null, 2), 'success');
                 document.getElementById('transferAmount').value = '';
@@ -451,6 +519,7 @@
     };
 
     document.getElementById('doWithdrawBtn').onclick = async () => {
+        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
         const accountId = document.getElementById('withdrawAccount').value;
         const amount = parseFloat(document.getElementById('withdrawAmount').value);
         const description = document.getElementById('transferDesc').value || 'Rút tiền ATM';
@@ -461,14 +530,26 @@
         }
 
         showResultArea('🏧 Đang rút tiền...', 'Đang gọi Transfer Service qua Gateway...', 'pending');
+        const timestamp = Math.floor(Date.now() / 1000).toString();
+        const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+        const method = 'POST';
+        const path = '/api/transfer/withdraw';
         const body = JSON.stringify({ account_id: accountId, amount: amount, description: description });
 
         try {
-            const { data } = await callGateway('/api/transfer/withdraw', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+            const signature = await generateHmacSignature(method, path, timestamp, nonce, body);
+            const resp = await fetch(GATEWAY_URL + path, {
+                method: method,
+                headers: {
+                    'Authorization': 'Bearer ' + idToken,
+                    'Content-Type': 'application/json',
+                    'X-Timestamp': timestamp,
+                    'X-Nonce': nonce,
+                    'X-Signature': signature
+                },
                 body: body
             });
+            const data = await resp.json();
             if (data.message === 'Withdrawal successful') {
                 showResultArea('✅ Rút tiền thành công!', JSON.stringify(data, null, 2), 'success');
                 document.getElementById('withdrawAmount').value = '';
@@ -480,32 +561,120 @@
         }
     };
 
+    // ============================================================
+    // ADMIN PANEL
+    // ============================================================
     document.getElementById('adminBtn').onclick = async () => {
-        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
-        document.getElementById('adminPanel').style.display = 'block';
-        document.getElementById('transferForm').style.display = 'none';
-        document.getElementById('withdrawForm').style.display = 'none';
-        showResultArea('⚙️ Admin Panel', 'Gateway sẽ kiểm tra role admin khi gọi Admin Service', 'pending');
-        document.getElementById('listUsersBtn').click();
+        if (!idToken) { 
+            alert('Vui lòng đăng nhập trước'); 
+            return; 
+        }
+        
+        showResultArea('⚙️ Admin Panel', 'Đang kiểm tra quyền truy cập qua Auth Service...', 'pending');
+        
+        const timestamp = Math.floor(Date.now() / 1000).toString();
+        const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+        const method = 'POST';
+        const path = '/api/auth/verify';
+        const body = '';
+        
+        try {
+            const signature = await generateHmacSignature(method, path, timestamp, nonce, body);
+            updateHmacStatus('pending', 'Đang gửi HMAC...');
+            
+            const verifyResp = await fetch(GATEWAY_URL + path, {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + idToken,
+                    'Content-Type': 'application/json',
+                    'X-Timestamp': timestamp,
+                    'X-Nonce': nonce,
+                    'X-Signature': signature,
+                    'X-Required-Role': 'admin'
+                }
+            });
+            
+            if (verifyResp.status === 403) {
+                const data = await verifyResp.json();
+                showResultArea('⛔ Truy cập bị từ chối', data.detail || 'Bạn không có quyền truy cập Admin Panel. Yêu cầu role: admin', 'error');
+                document.getElementById('adminPanel').style.display = 'none';
+                updateHmacStatus('error', 'Không có quyền admin');
+                return;
+            }
+            
+            if (verifyResp.status === 401) {
+                showResultArea('⛔ Phiên đăng nhập không hợp lệ', 'Vui lòng đăng nhập lại', 'error');
+                updateHmacStatus('error', 'Phiên không hợp lệ');
+                return;
+            }
+            
+            if (verifyResp.status === 200) {
+                const verifyData = await verifyResp.json();
+                document.getElementById('adminPanel').style.display = 'block';
+                document.getElementById('transferForm').style.display = 'none';
+                document.getElementById('withdrawForm').style.display = 'none';
+                document.getElementById('resultArea').style.display = 'none';
+                showResultArea('⚙️ Admin Panel', 'Xác thực role admin thành công', 'success');
+                updateHmacStatus('success', 'HMAC verified');
+                document.getElementById('listUsersBtn').click();
+            } else {
+                showResultArea('❌ Lỗi', 'Status: ' + verifyResp.status, 'error');
+            }
+        } catch (err) {
+            showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
+            updateHmacStatus('error', 'Lỗi: ' + err.message);
+        }
     };
 
     document.getElementById('listUsersBtn').onclick = async () => {
+        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
         showResultArea('📋 Danh sách users', 'Đang tải...', 'pending');
+        const timestamp = Math.floor(Date.now() / 1000).toString();
+        const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+        const method = 'GET';
+        const path = '/api/admin/users';
+
         try {
-            const { resp, data } = await callGateway('/api/admin/users', { method: 'GET' });
-            showResultArea(resp.ok ? '📋 Danh sách users' : '⛔ Truy cập bị từ chối', JSON.stringify(data, null, 2), resp.ok ? 'success' : 'error');
+            const signature = await generateHmacSignature(method, path, timestamp, nonce, '');
+            const resp = await fetch(GATEWAY_URL + path, {
+                method: method,
+                headers: {
+                    'Authorization': 'Bearer ' + idToken,
+                    'X-Timestamp': timestamp,
+                    'X-Nonce': nonce,
+                    'X-Signature': signature
+                }
+            });
+            const data = await resp.json();
+            showResultArea('📋 Danh sách users', JSON.stringify(data, null, 2), 'success');
         } catch (err) {
             showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
         }
     };
 
     document.getElementById('deleteUserBtn').onclick = async () => {
+        if (!idToken) { alert('Vui lòng đăng nhập trước'); return; }
         const userId = prompt('Nhập user ID cần xóa:');
         if (!userId) return;
         showResultArea('🗑️ Đang xóa user ' + userId, 'Đang gọi Admin Service qua Gateway...', 'pending');
+        const timestamp = Math.floor(Date.now() / 1000).toString();
+        const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+        const method = 'DELETE';
+        const path = '/api/admin/users/' + userId;
+
         try {
-            const { resp, data } = await callGateway('/api/admin/users/' + userId, { method: 'DELETE' });
-            showResultArea(resp.ok ? '🗑️ Kết quả xóa user' : '⛔ Truy cập bị từ chối', JSON.stringify(data, null, 2), resp.ok ? 'success' : 'error');
+            const signature = await generateHmacSignature(method, path, timestamp, nonce, '');
+            const resp = await fetch(GATEWAY_URL + path, {
+                method: method,
+                headers: {
+                    'Authorization': 'Bearer ' + idToken,
+                    'X-Timestamp': timestamp,
+                    'X-Nonce': nonce,
+                    'X-Signature': signature
+                }
+            });
+            const data = await resp.json();
+            showResultArea('🗑️ Kết quả xóa user', JSON.stringify(data, null, 2), 'success');
         } catch (err) {
             showResultArea('❌ Lỗi', 'Error: ' + err.message, 'error');
         }
