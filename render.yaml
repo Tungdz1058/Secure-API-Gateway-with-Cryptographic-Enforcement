@@ -19,7 +19,7 @@ services:
       - key: GATEWAY_SERVICE_SECRET
         sync: false
 
-  - type: web
+  - type: pserv
     name: bank-auth
     plan: free
     runtime: python
@@ -35,7 +35,7 @@ services:
       - key: REDIS_URL
         sync: false
 
-  - type: web
+  - type: pserv
     name: bank-transfer
     plan: free
     runtime: python
@@ -45,7 +45,7 @@ services:
       - key: GATEWAY_SERVICE_SECRET
         sync: false
 
-  - type: web
+  - type: pserv
     name: bank-account
     plan: free
     runtime: python
@@ -55,7 +55,7 @@ services:
       - key: GATEWAY_SERVICE_SECRET
         sync: false
 
-  - type: web
+  - type: pserv
     name: bank-admin
     plan: free
     runtime: python
