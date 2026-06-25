@@ -77,48 +77,14 @@ ROLE_REQUIREMENTS = {
 
 PREFIX_SERVICES = ["auth"]
 
-# ========== CACHE ==========
-role_cache = {}
-
-
-def get_cache_key(token: str, nonce: str = None) -> str:
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    if nonce:
-        return f"{token_hash}:{nonce}"
-    return token_hash
-
-
-def get_cached_roles(token: str, nonce: str = None):
-    """Returns (roles, hmac_verified, jwt_verified, session_active)"""
-    cache_key = get_cache_key(token, nonce)
-    if cache_key in role_cache:
-        cache_entry = role_cache[cache_key]
-        if time.time() < cache_entry["expiry"]:
-            return (
-                cache_entry.get("roles", []),
-                cache_entry.get("hmac_verified", False),
-                cache_entry.get("jwt_verified", False),
-                cache_entry.get("session_active", False),
-            )
-        else:
-            del role_cache[cache_key]
-    return None, None, None, None
-
-
-def set_cached_roles(token: str, nonce: str, roles: list, hmac_verified: bool = True,
-                     jwt_verified: bool = True, session_active: bool = True, ttl: int = CACHE_TTL):
-    if not (hmac_verified and jwt_verified and session_active):
-        logger.warning("⚠️ Not caching failed verification")
-        return
-    cache_key = get_cache_key(token, nonce)
-    role_cache[cache_key] = {
-        "roles": roles,
-        "hmac_verified": hmac_verified,
-        "jwt_verified": jwt_verified,
-        "session_active": session_active,
-        "expiry": time.time() + ttl,
-    }
-    logger.info(f"✅ Cached verification for nonce: {nonce}")
+# ========== LƯU Ý VỀ CACHE ==========
+# Trước đây Gateway cache kết quả verify theo key = (token + nonce).
+# Đây là LỖ HỔNG REPLAY: khi một request bị gửi lại y hệt (cùng token + nonce),
+# cache key trùng -> CACHE HIT -> Gateway bỏ qua việc gọi Auth Service -> bước
+# kiểm tra nonce không bao giờ chạy -> request replay được chấp nhận.
+# Vì mỗi request hợp lệ luôn có nonce mới nên cache này KHÔNG bao giờ hit cho
+# lưu lượng bình thường - nó chỉ vô tình mở đường cho replay.
+# => Bỏ hẳn cache. Luôn gọi Auth Service để nonce được kiểm tra mỗi request.
 
 
 # ========== RETRY HELPER (dùng chung cho auth verify + forward) ==========
@@ -210,80 +176,63 @@ async def gateway(request: Request, service: str, path: str):
         if not x_timestamp or not x_nonce or not x_signature:
             raise HTTPException(status_code=401, detail="Missing HMAC headers")
 
-        # ===== CHECK CACHE =====
-        cached_roles, cached_hmac, cached_jwt, cached_session = get_cached_roles(token, x_nonce)
-        if cached_roles is not None:
-            logger.info(f"✅ Cache hit for nonce: {x_nonce}")
-            if not cached_jwt:
-                raise HTTPException(status_code=401, detail="JWT verification failed")
-            if not cached_hmac:
-                raise HTTPException(status_code=401, detail="Invalid HMAC signature")
-            if not cached_session:
-                raise HTTPException(status_code=401, detail="Session not active - please login")
-            if not any(role in cached_roles for role in required_roles):
-                raise HTTPException(status_code=403, detail=f"Role required: {required_roles}")
-            logger.info("✅ Cache valid, skipping auth verification")
-        else:
-            # ===== CALL AUTH SERVICE =====
-            body_str = body_bytes.decode() if body_bytes else ""
-            auth_headers = {
-                "Authorization": authorization,
-                "Content-Type": "application/json",
-                "X-Required-Role": required_role,
-                "X-Timestamp": x_timestamp,
-                "X-Nonce": x_nonce,
-                "X-Signature": x_signature,
-                "X-Original-Path": f"/api/{service}/{path}",
-                "X-Original-Method": request.method,
-            }
+        # ===== LUÔN GỌI AUTH SERVICE =====
+        # Không cache theo nonce nữa: mỗi request phải được Auth Service xác minh
+        # lại (đặc biệt là kiểm tra nonce) để chống replay attack.
+        body_str = body_bytes.decode() if body_bytes else ""
+        auth_headers = {
+            "Authorization": authorization,
+            "Content-Type": "application/json",
+            "X-Required-Role": required_role,
+            "X-Timestamp": x_timestamp,
+            "X-Nonce": x_nonce,
+            "X-Signature": x_signature,
+            "X-Original-Path": f"/api/{service}/{path}",
+            "X-Original-Method": request.method,
+        }
 
-            logger.info("🔑 Sending to Auth Service for verification")
-            auth_url = f"{SERVICE_MAP['auth']}/auth/verify"
+        logger.info("🔑 Sending to Auth Service for verification")
+        auth_url = f"{SERVICE_MAP['auth']}/auth/verify"
 
+        try:
+            verify_response = await request_with_retry(
+                "POST", auth_url, headers=auth_headers, content=body_str
+            )
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            raise HTTPException(status_code=503, detail="Auth Service unavailable")
+        except (httpx.ReadTimeout, httpx.PoolTimeout):
+            raise HTTPException(status_code=504, detail="Auth Service timeout")
+
+        if verify_response.status_code != 200:
+            error_detail = "Authentication failed"
             try:
-                verify_response = await request_with_retry(
-                    "POST", auth_url, headers=auth_headers, content=body_str
-                )
-            except (httpx.ConnectError, httpx.ConnectTimeout):
-                raise HTTPException(status_code=503, detail="Auth Service unavailable")
-            except (httpx.ReadTimeout, httpx.PoolTimeout):
-                raise HTTPException(status_code=504, detail="Auth Service timeout")
+                error_detail = verify_response.json().get("detail", "Authentication failed")
+            except Exception:
+                error_detail = verify_response.text[:100]
+            raise HTTPException(status_code=verify_response.status_code
+                                if verify_response.status_code in (401, 403)
+                                else 403,
+                                detail=error_detail)
 
-            if verify_response.status_code != 200:
-                error_detail = "Authentication failed"
-                try:
-                    error_detail = verify_response.json().get("detail", "Authentication failed")
-                except Exception:
-                    error_detail = verify_response.text[:100]
-                raise HTTPException(status_code=verify_response.status_code
-                                    if verify_response.status_code in (401, 403)
-                                    else 403,
-                                    detail=error_detail)
+        verify_data = verify_response.json()
+        logger.info("✅ Auth response received")
 
-            verify_data = verify_response.json()
-            logger.info("✅ Auth response received")
+        hmac_verified = verify_data.get("hmac_verified", False)
+        jwt_verified = verify_data.get("jwt_verified", False)
+        session_active = verify_data.get("session_active", False)
+        roles = verify_data.get("roles", [])
 
-            hmac_verified = verify_data.get("hmac_verified", False)
-            jwt_verified = verify_data.get("jwt_verified", False)
-            session_active = verify_data.get("session_active", False)
-            roles = verify_data.get("roles", [])
+        if not jwt_verified:
+            raise HTTPException(status_code=401, detail="JWT verification failed")
+        if not hmac_verified:
+            logger.warning(f"❌ HMAC verification failed: {request.method} /api/{service}/{path}")
+            raise HTTPException(status_code=401, detail="Invalid HMAC signature")
+        if not session_active:
+            raise HTTPException(status_code=401, detail="Session not active - please login")
+        if not any(role in roles for role in required_roles):
+            raise HTTPException(status_code=403, detail=f"Role required: {required_roles}")
 
-            if hmac_verified and jwt_verified and session_active:
-                set_cached_roles(token, x_nonce, roles, hmac_verified, jwt_verified, session_active)
-            else:
-                logger.warning(f"⚠️ Not caching failed verification for nonce: {x_nonce}")
-
-            if not jwt_verified:
-                raise HTTPException(status_code=401, detail="JWT verification failed")
-            if not hmac_verified:
-                logger.warning(f"❌ HMAC verification failed: {request.method} /api/{service}/{path}")
-                raise HTTPException(status_code=401, detail="Invalid HMAC signature")
-            if not session_active:
-                raise HTTPException(status_code=401, detail="Session not active - please login")
-            if not any(role in roles for role in required_roles):
-                raise HTTPException(status_code=403, detail=f"Role required: {required_roles}")
-
-            logger.info("✅ All verifications passed")
+        logger.info("✅ All verifications passed")
 
     # ===== FORWARD REQUEST (giờ cũng có retry) =====
     if service in PREFIX_SERVICES:
@@ -322,14 +271,7 @@ async def health():
     return {
         "status": "ok",
         "services": list(SERVICE_MAP.keys()),
-        "cache_size": len(role_cache),
     }
-
-
-@app.get("/cache/clear")
-async def clear_cache():
-    role_cache.clear()
-    return {"message": "Cache cleared", "cache_size": 0}
 
 
 if __name__ == "__main__":
