@@ -1,6 +1,17 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
+
+
+class StrictBaseModel(BaseModel):
+    """
+    Base model dùng cho request từ client.
+    extra = "forbid" giúp chặn field lạ để chống Mass Assignment.
+    """
+
+    class Config:
+        extra = "forbid"
+
 
 class User(BaseModel):
     user_id: str
@@ -9,6 +20,7 @@ class User(BaseModel):
     full_name: str
     role: str = "user"
 
+
 class Account(BaseModel):
     account_id: str
     user_id: str
@@ -16,11 +28,13 @@ class Account(BaseModel):
     currency: str = "VND"
     status: str = "active"
 
-class TransferRequest(BaseModel):
-    from_account: str
-    to_account: str
-    amount: float
-    description: Optional[str] = None
+
+class TransferRequest(StrictBaseModel):
+    from_account: str = Field(..., min_length=1, max_length=50)
+    to_account: str = Field(..., min_length=1, max_length=50)
+    amount: float = Field(..., gt=0)
+    description: Optional[str] = Field(default=None, max_length=255)
+
 
 class TransferResponse(BaseModel):
     transaction_id: str
@@ -31,7 +45,8 @@ class TransferResponse(BaseModel):
     status: str
     timestamp: str
 
-class WithdrawRequest(BaseModel):
-    account_id: str
-    amount: float
-    description: Optional[str] = None
+
+class WithdrawRequest(StrictBaseModel):
+    account_id: str = Field(..., min_length=1, max_length=50)
+    amount: float = Field(..., gt=0)
+    description: Optional[str] = Field(default=None, max_length=255)
