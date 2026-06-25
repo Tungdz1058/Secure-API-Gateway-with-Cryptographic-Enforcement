@@ -69,11 +69,17 @@ async def _shutdown():
 
 
 # ========== SERVICE MAP ==========
+def required_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
 SERVICE_MAP = {
-    "auth": os.environ.get("AUTH_SERVICE_URL", "https://bank-auth.onrender.com"),
-    "transfer": os.environ.get("TRANSFER_SERVICE_URL", "https://bank-transfer.onrender.com"),
-    "account": os.environ.get("ACCOUNT_SERVICE_URL", "https://bank-account.onrender.com"),
-    "admin": os.environ.get("ADMIN_SERVICE_URL", "https://bank-admin.onrender.com"),
+    "auth": required_env("AUTH_SERVICE_URL"),
+    "transfer": required_env("TRANSFER_SERVICE_URL"),
+    "account": required_env("ACCOUNT_SERVICE_URL"),
+    "admin": required_env("ADMIN_SERVICE_URL"),
 }
 
 # ========== ROLE REQUIREMENTS ==========
