@@ -1,0 +1,66 @@
+services:
+  - type: web
+    name: bank-gateway
+    plan: free
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd gateway && uvicorn gateway:app --host 0.0.0.0 --port 8000
+    envVars:
+      - key: AUTH_SERVICE_URL
+        value: https://bank-auth.onrender.com
+      - key: TRANSFER_SERVICE_URL
+        value: https://bank-transfer.onrender.com
+      - key: ACCOUNT_SERVICE_URL
+        value: https://bank-account.onrender.com
+      - key: ADMIN_SERVICE_URL
+        value: https://bank-admin.onrender.com
+      - key: INTERNAL_AUTH_SECRET
+        sync: false
+      - key: GATEWAY_SERVICE_SECRET
+        sync: false
+
+  - type: web
+    name: bank-auth
+    plan: free
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd services/auth && uvicorn app:app --host 0.0.0.0 --port 5000
+    envVars:
+      - key: AUTH0_DOMAIN
+        value: apigatewaysecure.us.auth0.com
+      - key: AUTH0_CLIENT_ID
+        value: 5GkSY8Xk4oNRpJysIWx35UCyeInC0Vs3
+      - key: INTERNAL_AUTH_SECRET
+        sync: false
+      - key: REDIS_URL
+        sync: false
+
+  - type: web
+    name: bank-transfer
+    plan: free
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd services/transfer && uvicorn app:app --host 0.0.0.0 --port 5001
+    envVars:
+      - key: GATEWAY_SERVICE_SECRET
+        sync: false
+
+  - type: web
+    name: bank-account
+    plan: free
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd services/account && uvicorn app:app --host 0.0.0.0 --port 5002
+    envVars:
+      - key: GATEWAY_SERVICE_SECRET
+        sync: false
+
+  - type: web
+    name: bank-admin
+    plan: free
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd services/admin && uvicorn app:app --host 0.0.0.0 --port 5003
+    envVars:
+      - key: GATEWAY_SERVICE_SECRET
+        sync: false

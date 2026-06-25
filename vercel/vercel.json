@@ -1,0 +1,4 @@
+{
+  "builds": [{ "src": "clients/spa/index.html", "use": "@vercel/static" }],
+  "routes": [{ "src": "/(.*)", "dest": "/clients/spa/index.html" }]
+}
