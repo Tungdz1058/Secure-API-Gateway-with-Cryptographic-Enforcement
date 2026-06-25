@@ -14,7 +14,7 @@ app = FastAPI(title="Transfer Service")
 
 
 # Mock account database.
-# Trong production, dữ liệu này nên lấy từ Account Service hoặc database chung.
+# Trong production, dữ liệu này nên lấy từ Account Service hoặc database thật.
 # owner_id phải khớp với Auth0 "sub" của user.
 accounts = {
     "ACC001": {
@@ -58,10 +58,9 @@ def is_admin(gateway_user: dict) -> bool:
 
 def assert_can_access_account(account_id: str, gateway_user: dict) -> dict:
     """
-    BOLA / IDOR protection for transfer service.
+    BOLA / IDOR protection.
 
-    Token hợp lệ chưa đủ.
-    User chỉ được thao tác với account có owner_id trùng X-User-Id.
+    User thường chỉ được thao tác với account có owner_id trùng X-User-Id.
     Admin được phép thao tác tất cả account.
     """
     account = accounts.get(account_id)
@@ -103,11 +102,11 @@ async def transfer_money(
     gateway_user=Depends(verify_gateway_request),
 ):
     """
-    Chuyển tiền có chống BOLA.
+    Chuyển tiền có chống BOLA và Mass Assignment.
 
-    Quy tắc:
-    - User chỉ cần sở hữu from_account.
-    - to_account có thể là account người khác vì chuyển tiền cho người khác là hợp lệ.
+    Mass Assignment được chặn trong TransferRequest:
+    - Không cho client gửi field lạ như fee, status, balance, role, is_admin.
+    - amount phải > 0.
     """
     if request.from_account not in accounts:
         raise HTTPException(status_code=404, detail="Source account not found")
@@ -124,6 +123,7 @@ async def transfer_money(
     if to_acc["status"] != "active":
         raise HTTPException(status_code=400, detail="Destination account is not active")
 
+    # Pydantic đã kiểm tra amount > 0, nhưng giữ thêm check này để defense-in-depth.
     if request.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be greater than zero")
 
@@ -166,11 +166,19 @@ async def withdraw_money(
     request: WithdrawRequest,
     gateway_user=Depends(verify_gateway_request),
 ):
+    """
+    Rút tiền có chống BOLA và Mass Assignment.
+
+    Mass Assignment được chặn trong WithdrawRequest:
+    - Không cho client gửi field lạ như balance, role, is_admin, status.
+    - amount phải > 0.
+    """
     account = assert_can_access_account(request.account_id, gateway_user)
 
     if account["status"] != "active":
         raise HTTPException(status_code=400, detail="Account is not active")
 
+    # Pydantic đã kiểm tra amount > 0, nhưng giữ thêm check này để defense-in-depth.
     if request.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be greater than zero")
 
@@ -204,12 +212,10 @@ async def withdraw_money(
 @app.get("/history")
 async def get_history(
     account_id: str,
-    gateway_user=Depends(verify_gateway_request)
+    gateway_user=Depends(verify_gateway_request),
 ):
     """
     Xem lịch sử giao dịch có chống BOLA.
-
-    User chỉ xem được history của account thuộc chính mình.
     """
     assert_can_access_account(account_id, gateway_user)
 
