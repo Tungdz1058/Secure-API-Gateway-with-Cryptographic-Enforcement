@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 import os
@@ -9,16 +9,14 @@ import logging
 import hmac
 import hashlib
 import secrets
-
+import json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("gateway")
 
 app = FastAPI(title="API Gateway")
 
-
 # ========== CORS ==========
-# Chỉ cho frontend chính thức + localhost khi test. Không dùng wildcard *.vercel.app.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -31,41 +29,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # ========== CONFIG ==========
 CACHE_TTL = 60
 MAX_RETRIES = 5
-
-# Không retry 429 vì 429 là service báo quá nhiều request.
-# Retry 429 có thể làm service quá tải hơn.
-RETRY_STATUS = {502, 503, 504}
-
+RETRY_STATUS = {429, 502, 503, 504}
 BACKOFF_BASE = 1.0
 BACKOFF_CAP = 20.0
+TIMEOUT = httpx.Timeout(connect=10.0, read=55.0, write=20.0, pool=10.0)
+LIMITS = httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=30.0)
 
-TIMEOUT = httpx.Timeout(
-    connect=10.0,
-    read=55.0,
-    write=20.0,
-    pool=10.0,
-)
-
-LIMITS = httpx.Limits(
-    max_connections=20,
-    max_keepalive_connections=10,
-    keepalive_expiry=30.0,
-)
+# Bật/tắt endpoint demo lấy HMAC signature
+# Render env:
+# ENABLE_SECURITY_DEMO=true  -> bật demo
+# ENABLE_SECURITY_DEMO=false -> tắt demo
+ENABLE_SECURITY_DEMO = os.environ.get("ENABLE_SECURITY_DEMO", "false").lower() == "true"
 
 # Secret nội bộ Gateway -> Auth Service
 INTERNAL_AUTH_SECRET = os.environ.get(
     "INTERNAL_AUTH_SECRET",
-    "dev-internal-auth-secret-change-me",
+    "dev-internal-auth-secret-change-me"
 ).encode()
 
 # Secret nội bộ Gateway -> Microservices
 GATEWAY_SERVICE_SECRET = os.environ.get(
     "GATEWAY_SERVICE_SECRET",
-    "dev-gateway-service-secret-change-me",
+    "dev-gateway-service-secret-change-me"
 ).encode()
 
 http_client: httpx.AsyncClient | None = None
@@ -83,17 +71,16 @@ async def _shutdown():
     global http_client
     if http_client:
         await http_client.aclose()
-    logger.info("👋 Shared HTTP client closed")
+        logger.info("👋 Shared HTTP client closed")
 
 
 # ========== SERVICE MAP ==========
 SERVICE_MAP = {
     "auth": os.environ.get("AUTH_SERVICE_URL", "https://bank-auth.onrender.com"),
-    "transfer": os.environ.get("TRANSFER_SERVICE_URL", "https://bank-transfer.onrender.com"),
-    "account": os.environ.get("ACCOUNT_SERVICE_URL", "https://bank-account.onrender.com"),
-    "admin": os.environ.get("ADMIN_SERVICE_URL", "https://bank-admin.onrender.com"),
+    "transfer": os.environ.get("TRANSFER_SERVICE_URL", "https://bank-transfer-vd1p.onrender.com"),
+    "account": os.environ.get("ACCOUNT_SERVICE_URL", "https://bank-account-corr.onrender.com"),
+    "admin": os.environ.get("ADMIN_SERVICE_URL", "https://bank-admin-ou0n.onrender.com"),
 }
-
 
 # ========== ROLE REQUIREMENTS ==========
 ROLE_REQUIREMENTS = {
@@ -105,93 +92,51 @@ ROLE_REQUIREMENTS = {
 PREFIX_SERVICES = ["auth"]
 
 
-# ========== METHOD ALLOWLIST ==========
-# Gateway chỉ cho phép các HTTP method hợp lệ theo từng service/path.
-# Request sai method sẽ bị chặn tại Gateway trước khi đến microservice.
-METHOD_ALLOWLIST = {
-    "auth": {
-        "login": ["POST"],
-        "revoke": ["POST"],
-        "verify": ["POST"],
-    },
-    "account": {
-        # /api/account/{account_id}
-        # /api/account/me/accounts
-        # /api/account/user/{user_id}
-        "*": ["GET"],
-    },
-    "transfer": {
-        "transfer": ["POST"],
-        "withdraw": ["POST"],
-        "history": ["GET"],
-    },
-    "admin": {
-        "users": ["GET"],
-    },
-}
-
-
-def check_method_allowlist(service: str, path: str, method: str):
+# ========== HMAC HELPERS ==========
+def make_hmac(secret: bytes, method: str, path: str, timestamp: str, nonce: str, body: str) -> str:
     """
-    Method Allowlist:
-    - Chặn method không được phép tại Gateway.
-    - Không forward request sai method sang microservice.
+    Canonical request:
+    METHOD|PATH|TIMESTAMP|NONCE|BODY
     """
-    service_rules = METHOD_ALLOWLIST.get(service)
-
-    if not service_rules:
-        logger.warning(
-            f"⛔ Service blocked by Gateway policy: {method.upper()} /api/{service}/{path}"
-        )
-        raise HTTPException(
-            status_code=404,
-            detail="Route is not allowed by Gateway policy",
-        )
-
-    # Lấy segment đầu tiên của path.
-    # Ví dụ:
-    # /api/account/ACC001        -> ACC001
-    # /api/transfer/transfer     -> transfer
-    # /api/admin/users           -> users
-    path_key = path.split("/")[0] if path else ""
-
-    allowed_methods = service_rules.get(path_key)
-
-    # Với account, account_id thay đổi nên dùng wildcard "*".
-    if allowed_methods is None:
-        allowed_methods = service_rules.get("*")
-
-    if allowed_methods is None:
-        logger.warning(
-            f"⛔ Route blocked by Gateway policy: {method.upper()} /api/{service}/{path}"
-        )
-        raise HTTPException(
-            status_code=404,
-            detail="Route is not allowed by Gateway policy",
-        )
-
-    if method.upper() not in allowed_methods:
-        logger.warning(
-            f"⛔ Method blocked by Gateway policy: {method.upper()} /api/{service}/{path}"
-        )
-        raise HTTPException(
-            status_code=405,
-            detail=f"Method {method.upper()} is not allowed for this route",
-        )
-
-
-def make_hmac(
-    secret: bytes,
-    method: str,
-    path: str,
-    timestamp: str,
-    nonce: str,
-    body: str,
-) -> str:
-    canonical = f"{method}|{path}|{timestamp}|{nonce}|{body}"
+    canonical = f"{method.upper()}|{path}|{timestamp}|{nonce}|{body}"
     return hmac.new(secret, canonical.encode(), hashlib.sha256).hexdigest()
 
 
+def build_demo_curl(
+    url: str,
+    method: str,
+    authorization: str,
+    timestamp: str,
+    nonce: str,
+    signature: str,
+    user_id: str,
+    user_roles: str,
+    body: str = "",
+) -> str:
+    if method.upper() == "GET":
+        return f"""curl -i {url} \\
+  -H "Authorization: {authorization}" \\
+  -H "X-Gateway-Timestamp: {timestamp}" \\
+  -H "X-Gateway-Nonce: {nonce}" \\
+  -H "X-Gateway-Signature: {signature}" \\
+  -H "X-User-Id: {user_id}" \\
+  -H "X-User-Roles: {user_roles}"
+"""
+
+    return f"""curl -i {url} \\
+  -X {method.upper()} \\
+  -H "Authorization: {authorization}" \\
+  -H "Content-Type: application/json" \\
+  -H "X-Gateway-Timestamp: {timestamp}" \\
+  -H "X-Gateway-Nonce: {nonce}" \\
+  -H "X-Gateway-Signature: {signature}" \\
+  -H "X-User-Id: {user_id}" \\
+  -H "X-User-Roles: {user_roles}" \\
+  -d '{body}'
+"""
+
+
+# ========== RETRY ==========
 def _retry_delay(attempt: int, response: httpx.Response | None) -> float:
     if response is not None:
         retry_after = response.headers.get("retry-after")
@@ -214,7 +159,6 @@ async def request_with_retry(
     max_retries: int = MAX_RETRIES,
 ) -> httpx.Response:
     assert http_client is not None, "HTTP client chưa được khởi tạo"
-
     last_exc: Exception | None = None
 
     for attempt in range(max_retries):
@@ -244,7 +188,6 @@ async def request_with_retry(
             httpx.PoolTimeout,
         ) as exc:
             last_exc = exc
-
             if attempt < max_retries - 1:
                 delay = _retry_delay(attempt, None)
                 logger.warning(
@@ -253,7 +196,6 @@ async def request_with_retry(
                 )
                 await asyncio.sleep(delay)
                 continue
-
             raise
 
     if last_exc:
@@ -262,25 +204,223 @@ async def request_with_retry(
     raise HTTPException(status_code=503, detail="Service unavailable after retries")
 
 
+# ==========================================================
+# SECURITY DEMO ENDPOINT 1
+# Tạo signed request hợp lệ cho Account Service
+# Dùng để test:
+# - HMAC hợp lệ -> 200
+# - sửa 1 ký tự signature -> 401 Invalid Gateway signature
+# - replay lại sau khi timestamp hết hạn -> 401 Gateway timestamp expired
+# ==========================================================
+@app.get("/api/security-demo/signed-account-request")
+async def create_signed_account_request(
+    authorization: str = Header(None),
+):
+    if not ENABLE_SECURITY_DEMO:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+
+    method = "GET"
+    path = "/ACC001"
+    body = ""
+    timestamp = str(int(time.time()))
+    nonce = secrets.token_hex(16)
+
+    signature = make_hmac(
+        GATEWAY_SERVICE_SECRET,
+        method,
+        path,
+        timestamp,
+        nonce,
+        body,
+    )
+
+    # User demo hiện tại của bạn
+    demo_user_id = "auth0|6a2cd06b23a8f6df6a9e26e3"
+    demo_roles = "user"
+
+    microservice_url = f"{SERVICE_MAP['account']}{path}"
+
+    valid_curl = build_demo_curl(
+        url=microservice_url,
+        method=method,
+        authorization=authorization,
+        timestamp=timestamp,
+        nonce=nonce,
+        signature=signature,
+        user_id=demo_user_id,
+        user_roles=demo_roles,
+        body=body,
+    )
+
+    # Sửa 1 ký tự cuối của signature để test fake signature
+    tampered_signature = signature[:-1] + ("0" if signature[-1] != "0" else "1")
+
+    fake_signature_curl = build_demo_curl(
+        url=microservice_url,
+        method=method,
+        authorization=authorization,
+        timestamp=timestamp,
+        nonce=nonce,
+        signature=tampered_signature,
+        user_id=demo_user_id,
+        user_roles=demo_roles,
+        body=body,
+    )
+
+    return {
+        "demo": "signed account request",
+        "warning": "Use for security demo only. Disable ENABLE_SECURITY_DEMO after testing.",
+        "method": method,
+        "microservice_url": microservice_url,
+        "path": path,
+        "body": body,
+        "timestamp": timestamp,
+        "nonce": nonce,
+        "signature": signature,
+        "tampered_signature_one_char_changed": tampered_signature,
+        "expected_valid_result": "200 OK if token/session/user mapping is valid",
+        "expected_fake_signature_result": "401 Invalid Gateway signature",
+        "valid_curl": valid_curl,
+        "fake_signature_curl": fake_signature_curl,
+    }
+
+
+# ==========================================================
+# SECURITY DEMO ENDPOINT 2
+# Tạo signed request hợp lệ cho Transfer Service
+# Dùng để test:
+# - body gốc amount=10000 + signature hợp lệ
+# - sửa body amount=10001 nhưng giữ signature cũ -> 401 Invalid Gateway signature
+# - sửa 1 ký tự signature -> 401 Invalid Gateway signature
+# - replay cùng timestamp/nonce/signature -> kiểm tra nonce/timestamp behavior
+# ==========================================================
+@app.get("/api/security-demo/signed-transfer-request")
+async def create_signed_transfer_request(
+    authorization: str = Header(None),
+):
+    if not ENABLE_SECURITY_DEMO:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+
+    method = "POST"
+    path = "/transfer"
+
+    original_body_obj = {
+        "from_account": "ACC001",
+        "to_account": "ACC002",
+        "amount": 10000,
+        "description": "hmac integrity demo",
+    }
+
+    # Phải dùng cùng kiểu serialize khi ký và khi gửi curl
+    original_body = json.dumps(original_body_obj, separators=(",", ":"), sort_keys=True)
+
+    timestamp = str(int(time.time()))
+    nonce = secrets.token_hex(16)
+
+    signature = make_hmac(
+        GATEWAY_SERVICE_SECRET,
+        method,
+        path,
+        timestamp,
+        nonce,
+        original_body,
+    )
+
+    # User demo hiện tại của bạn
+    demo_user_id = "auth0|6a2cd06b23a8f6df6a9e26e3"
+    demo_roles = "user"
+
+    microservice_url = f"{SERVICE_MAP['transfer']}{path}"
+
+    valid_curl = build_demo_curl(
+        url=microservice_url,
+        method=method,
+        authorization=authorization,
+        timestamp=timestamp,
+        nonce=nonce,
+        signature=signature,
+        user_id=demo_user_id,
+        user_roles=demo_roles,
+        body=original_body,
+    )
+
+    # Sửa 1 ký tự trong body: amount 10000 -> 10001
+    tampered_body_obj = {
+        "from_account": "ACC001",
+        "to_account": "ACC002",
+        "amount": 10001,
+        "description": "hmac integrity demo",
+    }
+
+    tampered_body = json.dumps(tampered_body_obj, separators=(",", ":"), sort_keys=True)
+
+    tampered_body_curl = build_demo_curl(
+        url=microservice_url,
+        method=method,
+        authorization=authorization,
+        timestamp=timestamp,
+        nonce=nonce,
+        signature=signature,
+        user_id=demo_user_id,
+        user_roles=demo_roles,
+        body=tampered_body,
+    )
+
+    # Sửa 1 ký tự cuối của signature
+    tampered_signature = signature[:-1] + ("0" if signature[-1] != "0" else "1")
+
+    fake_signature_curl = build_demo_curl(
+        url=microservice_url,
+        method=method,
+        authorization=authorization,
+        timestamp=timestamp,
+        nonce=nonce,
+        signature=tampered_signature,
+        user_id=demo_user_id,
+        user_roles=demo_roles,
+        body=original_body,
+    )
+
+    return {
+        "demo": "signed transfer request",
+        "warning": "Use for security demo only. Disable ENABLE_SECURITY_DEMO after testing.",
+        "method": method,
+        "microservice_url": microservice_url,
+        "path": path,
+        "original_body": original_body_obj,
+        "tampered_body": tampered_body_obj,
+        "changed_field": "amount",
+        "changed_from": 10000,
+        "changed_to": 10001,
+        "timestamp": timestamp,
+        "nonce": nonce,
+        "signature_created_from_original_body": signature,
+        "tampered_signature_one_char_changed": tampered_signature,
+        "expected_valid_result": "200 OK or business validation result, but not Invalid Gateway signature",
+        "expected_tampered_body_result": "401 Invalid Gateway signature",
+        "expected_fake_signature_result": "401 Invalid Gateway signature",
+        "valid_curl": valid_curl,
+        "tampered_body_curl": tampered_body_curl,
+        "fake_signature_curl": fake_signature_curl,
+        "replay_test_instruction": "Run valid_curl twice. If nonce cache exists, second request should be rejected. If not, replay is limited by timestamp expiration.",
+    }
+
+
 # ========== MAIN ROUTE ==========
-@app.api_route(
-    "/api/{service}/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-)
+@app.api_route("/api/{service}/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def gateway(request: Request, service: str, path: str):
     service_url = SERVICE_MAP.get(service)
 
     if not service_url:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Service {service} not found",
-        )
+        raise HTTPException(status_code=404, detail=f"Service {service} not found")
 
     logger.info(f"📨 Request: {request.method} /api/{service}/{path}")
-
-    # Chặn method/path không hợp lệ ngay tại Gateway.
-    # Nếu method không nằm trong allowlist, request sẽ không được forward sang microservice.
-    check_method_allowlist(service, path, request.method)
 
     body_bytes = await request.body()
     body_str = body_bytes.decode() if body_bytes else ""
@@ -290,23 +430,19 @@ async def gateway(request: Request, service: str, path: str):
     verified_roles: list[str] = []
 
     # ===== AUTHENTICATION & AUTHORIZATION =====
-    # Frontend chỉ gửi Bearer token.
-    # Gateway tự ký HMAC nội bộ khi hỏi Auth Service.
     if service in ROLE_REQUIREMENTS:
         authorization = request.headers.get("authorization")
 
         if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(
-                status_code=401,
-                detail="Missing or invalid Authorization header",
-            )
+            raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
         required_roles = ROLE_REQUIREMENTS[service]
+
         original_path = f"/api/{service}/{path}"
         original_method = request.method
-
         internal_timestamp = str(int(time.time()))
         internal_nonce = secrets.token_hex(16)
+
         internal_signature = make_hmac(
             INTERNAL_AUTH_SECRET,
             original_method,
@@ -328,6 +464,7 @@ async def gateway(request: Request, service: str, path: str):
         }
 
         auth_url = f"{SERVICE_MAP['auth']}/auth/verify"
+
         logger.info("🔑 Sending internally signed request to Auth Service")
 
         try:
@@ -338,22 +475,13 @@ async def gateway(request: Request, service: str, path: str):
                 content=body_str,
             )
         except (httpx.ConnectError, httpx.ConnectTimeout):
-            raise HTTPException(
-                status_code=503,
-                detail="Auth Service unavailable",
-            )
+            raise HTTPException(status_code=503, detail="Auth Service unavailable")
         except (httpx.ReadTimeout, httpx.PoolTimeout):
-            raise HTTPException(
-                status_code=504,
-                detail="Auth Service timeout",
-            )
+            raise HTTPException(status_code=504, detail="Auth Service timeout")
 
         if verify_response.status_code != 200:
             try:
-                error_detail = verify_response.json().get(
-                    "detail",
-                    "Authentication failed",
-                )
+                error_detail = verify_response.json().get("detail", "Authentication failed")
             except Exception:
                 error_detail = verify_response.text[:100]
 
@@ -369,6 +497,7 @@ async def gateway(request: Request, service: str, path: str):
         jwt_verified = verify_data.get("jwt_verified", False)
         hmac_verified = verify_data.get("hmac_verified", False)
         session_active = verify_data.get("session_active", False)
+
         verified_roles = verify_data.get("roles", []) or []
         verified_user = verify_data.get("user", "") or ""
         verified_email = verify_data.get("email", "") or ""
@@ -377,22 +506,13 @@ async def gateway(request: Request, service: str, path: str):
             raise HTTPException(status_code=401, detail="JWT verification failed")
 
         if not hmac_verified:
-            raise HTTPException(
-                status_code=401,
-                detail="Internal Gateway HMAC verification failed",
-            )
+            raise HTTPException(status_code=401, detail="Internal Gateway HMAC verification failed")
 
         if not session_active:
-            raise HTTPException(
-                status_code=401,
-                detail="Session not active - please login",
-            )
+            raise HTTPException(status_code=401, detail="Session not active - please login")
 
         if not any(role in verified_roles for role in required_roles):
-            raise HTTPException(
-                status_code=403,
-                detail=f"Role required: {required_roles}",
-            )
+            raise HTTPException(status_code=403, detail=f"Role required: {required_roles}")
 
         logger.info("✅ JWT, session, role and internal HMAC verified")
 
@@ -405,9 +525,9 @@ async def gateway(request: Request, service: str, path: str):
     headers = dict(request.headers)
     headers.pop("host", None)
 
-    # Không forward HMAC cũ từ client.
-    # Client không còn giữ secret.
-    for h in [
+    # Không forward các header nội bộ do client tự chèn vào.
+    # Gateway phải tự tạo lại các header này.
+    blocked_client_headers = [
         "x-timestamp",
         "x-nonce",
         "x-signature",
@@ -416,7 +536,12 @@ async def gateway(request: Request, service: str, path: str):
         "x-gateway-signature",
         "x-original-path",
         "x-original-method",
-    ]:
+        "x-user-id",
+        "x-user-email",
+        "x-user-roles",
+    ]
+
+    for h in blocked_client_headers:
         headers.pop(h, None)
 
     # Với business microservice, Gateway ký request nội bộ để chặn gọi thẳng service.
@@ -424,6 +549,7 @@ async def gateway(request: Request, service: str, path: str):
         service_path = f"/{forward_path}"
         service_timestamp = str(int(time.time()))
         service_nonce = secrets.token_hex(16)
+
         service_signature = make_hmac(
             GATEWAY_SERVICE_SECRET,
             request.method,
@@ -448,21 +574,12 @@ async def gateway(request: Request, service: str, path: str):
             content=body_bytes,
         )
     except (httpx.ConnectError, httpx.ConnectTimeout):
-        raise HTTPException(
-            status_code=503,
-            detail=f"Service {service} unavailable",
-        )
+        raise HTTPException(status_code=503, detail=f"Service {service} unavailable")
     except (httpx.ReadTimeout, httpx.PoolTimeout):
-        raise HTTPException(
-            status_code=504,
-            detail=f"Service {service} timeout",
-        )
+        raise HTTPException(status_code=504, detail=f"Service {service} timeout")
 
     if response.status_code == 429:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Service {service} đang quá tải, thử lại sau",
-        )
+        raise HTTPException(status_code=429, detail=f"Service {service} đang quá tải, thử lại sau")
 
     try:
         data = response.json()
@@ -474,10 +591,7 @@ async def gateway(request: Request, service: str, path: str):
         }
 
     if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=data.get("detail", data),
-        )
+        raise HTTPException(status_code=response.status_code, detail=data.get("detail", data))
 
     return data
 
@@ -487,6 +601,7 @@ async def health():
     return {
         "status": "ok",
         "services": list(SERVICE_MAP.keys()),
+        "security_demo_enabled": ENABLE_SECURITY_DEMO,
     }
 
 
