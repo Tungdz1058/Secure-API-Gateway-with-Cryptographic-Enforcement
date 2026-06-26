@@ -233,6 +233,18 @@
     let savedVerifier = null;
     let userRole = 'user';
 
+    function getOrCreateDeviceId() {
+        let deviceId = localStorage.getItem('bank_demo_device_id');
+        if (!deviceId) {
+            deviceId = crypto.randomUUID();
+            localStorage.setItem('bank_demo_device_id', deviceId);
+        }
+        return deviceId;
+    }
+
+    const DEVICE_ID = getOrCreateDeviceId();
+    window.DEVICE_ID = DEVICE_ID;
+
     const params = new URLSearchParams(window.location.search);
     const hasCode = params.get('code') !== null;
     const hasState = params.get('state') !== null;
@@ -347,12 +359,16 @@
             }
 
             idToken = data.id_token;
+            window.idToken = idToken;
             document.getElementById('tokenDisplay').textContent = JSON.stringify(data, null, 2);
 
             // Đúng luồng: login trước để Auth Service tạo active session
             const loginResp = await fetch(GATEWAY_URL + '/api/auth/login', {
                 method: 'POST',
-                headers: { 'Authorization': 'Bearer ' + idToken }
+                headers: {
+                    'Authorization': 'Bearer ' + idToken,
+                    'X-Device-Id': DEVICE_ID
+                }
             });
             const loginData = await loginResp.json();
 
@@ -379,6 +395,7 @@
         if (!idToken) throw new Error('Vui lòng đăng nhập trước');
         const headers = options.headers || {};
         headers['Authorization'] = 'Bearer ' + idToken;
+        headers['X-Device-Id'] = DEVICE_ID;
         updateHmacStatus('pending', 'Gateway đang ký nội bộ...');
         const resp = await fetch(GATEWAY_URL + path, { ...options, headers });
         const data = await resp.json();
@@ -515,10 +532,14 @@
         if (idToken) {
             await fetch(GATEWAY_URL + '/api/auth/revoke', {
                 method: 'POST',
-                headers: { 'Authorization': 'Bearer ' + idToken }
+                headers: {
+                    'Authorization': 'Bearer ' + idToken,
+                    'X-Device-Id': DEVICE_ID
+                }
             });
         }
         idToken = null;
+        window.idToken = null;
         document.getElementById('tokenDisplay').textContent = '(đã đăng xuất)';
         document.getElementById('balanceBtn').disabled = true;
         document.getElementById('transferBtn').disabled = true;
