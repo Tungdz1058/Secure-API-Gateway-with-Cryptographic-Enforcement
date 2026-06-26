@@ -9,6 +9,7 @@ import logging
 import hmac
 import hashlib
 import secrets
+import json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("gateway")
@@ -50,6 +51,13 @@ GATEWAY_SERVICE_SECRET = os.environ.get(
     "dev-gateway-service-secret-change-me"
 ).encode()
 
+# Bật/tắt endpoint demo ký HMAC/replay.
+# Render Environment: ENABLE_SECURITY_DEMO=true khi demo, false sau khi demo.
+ENABLE_SECURITY_DEMO = os.environ.get(
+    "ENABLE_SECURITY_DEMO",
+    "false"
+).lower() == "true"
+
 http_client: httpx.AsyncClient | None = None
 
 
@@ -86,7 +94,20 @@ ROLE_REQUIREMENTS = {
 PREFIX_SERVICES = ["auth"]
 
 
+# ========== METHOD ALLOWLIST ==========
+# Gateway-level method policy. Có thể chỉnh theo route thực tế của bạn.
+METHOD_ALLOWLIST = {
+    "account": {"GET"},
+    "transfer": {"POST"},
+    "admin": {"GET", "POST"},
+}
+
+
 def make_hmac(secret: bytes, method: str, path: str, timestamp: str, nonce: str, body: str) -> str:
+    """
+    Tạo HMAC-SHA256 cho canonical request.
+    Canonical format: METHOD|PATH|TIMESTAMP|NONCE|BODY
+    """
     canonical = f"{method}|{path}|{timestamp}|{nonce}|{body}"
     return hmac.new(secret, canonical.encode(), hashlib.sha256).hexdigest()
 
@@ -141,6 +162,92 @@ async def request_with_retry(method: str, url: str, *, headers: dict = None,
     raise HTTPException(status_code=503, detail="Service unavailable after retries")
 
 
+async def verify_request_with_auth_service(
+    *,
+    authorization: str,
+    x_device_id: str,
+    required_roles: list[str],
+    original_method: str,
+    original_path: str,
+    body_str: str,
+) -> dict:
+    """
+    Gateway gọi Auth Service bằng HMAC nội bộ để verify:
+    - JWT signature/issuer/audience/expiration
+    - active session
+    - device binding
+    - role
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+
+    if not x_device_id:
+        raise HTTPException(status_code=401, detail="Missing device id")
+
+    internal_timestamp = str(int(time.time()))
+    internal_nonce = secrets.token_hex(16)
+    internal_signature = make_hmac(
+        INTERNAL_AUTH_SECRET,
+        original_method,
+        original_path,
+        internal_timestamp,
+        internal_nonce,
+        body_str,
+    )
+
+    auth_headers = {
+        "Authorization": authorization,
+        "Content-Type": "application/json",
+        "X-Required-Role": ",".join(required_roles),
+        "X-Gateway-Timestamp": internal_timestamp,
+        "X-Gateway-Nonce": internal_nonce,
+        "X-Gateway-Signature": internal_signature,
+        "X-Original-Path": original_path,
+        "X-Original-Method": original_method,
+        "X-Device-Id": x_device_id,
+    }
+
+    auth_url = f"{SERVICE_MAP['auth']}/auth/verify"
+    logger.info("🔑 Sending internally signed request to Auth Service")
+
+    try:
+        verify_response = await request_with_retry(
+            "POST", auth_url, headers=auth_headers, content=body_str
+        )
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        raise HTTPException(status_code=503, detail="Auth Service unavailable")
+    except (httpx.ReadTimeout, httpx.PoolTimeout):
+        raise HTTPException(status_code=504, detail="Auth Service timeout")
+
+    if verify_response.status_code != 200:
+        try:
+            error_detail = verify_response.json().get("detail", "Authentication failed")
+        except Exception:
+            error_detail = verify_response.text[:100]
+        raise HTTPException(
+            status_code=verify_response.status_code if verify_response.status_code in (401, 403) else 403,
+            detail=error_detail,
+        )
+
+    verify_data = verify_response.json()
+    jwt_verified = verify_data.get("jwt_verified", False)
+    hmac_verified = verify_data.get("hmac_verified", False)
+    session_active = verify_data.get("session_active", False)
+    verified_roles = verify_data.get("roles", []) or []
+
+    if not jwt_verified:
+        raise HTTPException(status_code=401, detail="JWT verification failed")
+    if not hmac_verified:
+        raise HTTPException(status_code=401, detail="Internal Gateway HMAC verification failed")
+    if not session_active:
+        raise HTTPException(status_code=401, detail="Session not active - please login")
+    if not any(role in verified_roles for role in required_roles):
+        raise HTTPException(status_code=403, detail=f"Role required: {required_roles}")
+
+    logger.info("✅ JWT, session, device binding, role and internal HMAC verified")
+    return verify_data
+
+
 # ========== MAIN ROUTE ==========
 @app.api_route("/api/{service}/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def gateway(request: Request, service: str, path: str):
@@ -157,82 +264,35 @@ async def gateway(request: Request, service: str, path: str):
     verified_email = ""
     verified_roles: list[str] = []
 
+    # ===== METHOD ALLOWLIST =====
+    # Chặn method không hợp lệ ngay tại Gateway trước khi verify/forward.
+    if service in METHOD_ALLOWLIST and request.method not in METHOD_ALLOWLIST[service]:
+        raise HTTPException(
+            status_code=405,
+            detail=f"Method {request.method} not allowed for service {service}"
+        )
+
     # ===== AUTHENTICATION & AUTHORIZATION =====
-    # Frontend chỉ gửi Bearer token. Gateway tự ký HMAC nội bộ khi hỏi Auth Service.
+    # Frontend gửi Bearer token + X-Device-Id. Gateway tự ký HMAC nội bộ khi hỏi Auth Service.
     if service in ROLE_REQUIREMENTS:
         authorization = request.headers.get("authorization")
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-        if not x_device_id:
-            raise HTTPException(status_code=401, detail="Missing device id")
-
         required_roles = ROLE_REQUIREMENTS[service]
 
         original_path = f"/api/{service}/{path}"
         original_method = request.method
-        internal_timestamp = str(int(time.time()))
-        internal_nonce = secrets.token_hex(16)
-        internal_signature = make_hmac(
-            INTERNAL_AUTH_SECRET,
-            original_method,
-            original_path,
-            internal_timestamp,
-            internal_nonce,
-            body_str,
+
+        verify_data = await verify_request_with_auth_service(
+            authorization=authorization,
+            x_device_id=x_device_id,
+            required_roles=required_roles,
+            original_method=original_method,
+            original_path=original_path,
+            body_str=body_str,
         )
 
-        auth_headers = {
-            "Authorization": authorization,
-            "Content-Type": "application/json",
-            "X-Required-Role": ",".join(required_roles),
-            "X-Gateway-Timestamp": internal_timestamp,
-            "X-Gateway-Nonce": internal_nonce,
-            "X-Gateway-Signature": internal_signature,
-            "X-Original-Path": original_path,
-            "X-Original-Method": original_method,
-            "X-Device-Id": x_device_id,
-        }
-
-        auth_url = f"{SERVICE_MAP['auth']}/auth/verify"
-        logger.info("🔑 Sending internally signed request to Auth Service")
-
-        try:
-            verify_response = await request_with_retry(
-                "POST", auth_url, headers=auth_headers, content=body_str
-            )
-        except (httpx.ConnectError, httpx.ConnectTimeout):
-            raise HTTPException(status_code=503, detail="Auth Service unavailable")
-        except (httpx.ReadTimeout, httpx.PoolTimeout):
-            raise HTTPException(status_code=504, detail="Auth Service timeout")
-
-        if verify_response.status_code != 200:
-            try:
-                error_detail = verify_response.json().get("detail", "Authentication failed")
-            except Exception:
-                error_detail = verify_response.text[:100]
-            raise HTTPException(
-                status_code=verify_response.status_code if verify_response.status_code in (401, 403) else 403,
-                detail=error_detail,
-            )
-
-        verify_data = verify_response.json()
-        jwt_verified = verify_data.get("jwt_verified", False)
-        hmac_verified = verify_data.get("hmac_verified", False)
-        session_active = verify_data.get("session_active", False)
         verified_roles = verify_data.get("roles", []) or []
         verified_user = verify_data.get("user", "") or ""
         verified_email = verify_data.get("email", "") or ""
-
-        if not jwt_verified:
-            raise HTTPException(status_code=401, detail="JWT verification failed")
-        if not hmac_verified:
-            raise HTTPException(status_code=401, detail="Internal Gateway HMAC verification failed")
-        if not session_active:
-            raise HTTPException(status_code=401, detail="Session not active - please login")
-        if not any(role in verified_roles for role in required_roles):
-            raise HTTPException(status_code=403, detail=f"Role required: {required_roles}")
-
-        logger.info("✅ JWT, session, role and internal HMAC verified")
 
     # ===== FORWARD REQUEST =====
     if service in PREFIX_SERVICES:
@@ -244,10 +304,12 @@ async def gateway(request: Request, service: str, path: str):
     headers.pop("host", None)
 
     # Không forward HMAC cũ từ client. Client không còn giữ secret.
+    # Nếu attacker tự thêm X-Gateway-* hoặc X-User-* vào request, Gateway sẽ xóa rồi tự tạo lại.
     for h in [
         "x-timestamp", "x-nonce", "x-signature",
         "x-gateway-timestamp", "x-gateway-nonce", "x-gateway-signature",
         "x-original-path", "x-original-method",
+        "x-user-id", "x-user-email", "x-user-roles",
     ]:
         headers.pop(h, None)
 
@@ -297,9 +359,182 @@ async def gateway(request: Request, service: str, path: str):
     return data
 
 
+# ========== SECURITY DEMO ENDPOINTS ==========
+@app.get("/api/security-demo/signed-transfer-request")
+async def signed_transfer_request_demo(request: Request):
+    """
+    Demo endpoint chỉ dùng khi ENABLE_SECURITY_DEMO=true.
+
+    Endpoint này tạo ra các lệnh curl để chứng minh:
+    1. VALID CURL: request có HMAC hợp lệ.
+    2. TAMPERED BODY CURL: body bị sửa 1 ký tự nhưng vẫn dùng signature cũ.
+    3. FAKE SIGNATURE CURL: attacker tự thêm signature giả.
+    4. REPLAY CURL: gửi lại cùng timestamp + nonce + signature để demo replay protection.
+
+    Lưu ý:
+    - Không trả secret.
+    - Chỉ bật endpoint này khi demo.
+    - Demo xong nên tắt ENABLE_SECURITY_DEMO=false.
+    """
+    if not ENABLE_SECURITY_DEMO:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    authorization = request.headers.get("authorization")
+    x_device_id = request.headers.get("x-device-id", "")
+
+    # Verify user/session/device trước khi cho lấy demo curl.
+    verify_data = await verify_request_with_auth_service(
+        authorization=authorization,
+        x_device_id=x_device_id,
+        required_roles=["user", "admin"],
+        original_method=request.method,
+        original_path="/api/security-demo/signed-transfer-request",
+        body_str="",
+    )
+
+    verified_user = verify_data.get("user", "") or ""
+    verified_email = verify_data.get("email", "") or ""
+    verified_roles = verify_data.get("roles", []) or []
+
+    transfer_url = SERVICE_MAP["transfer"]
+    method = "POST"
+    service_path = "/transfer"
+
+    # ===== 1. Valid request =====
+    original_body_obj = {
+        "from_account": "ACC001",
+        "to_account": "ACC002",
+        "amount": 10000,
+        "description": "valid hmac security demo"
+    }
+    original_body = json.dumps(original_body_obj, separators=(",", ":"), sort_keys=True)
+
+    timestamp = str(int(time.time()))
+    nonce = secrets.token_hex(16)
+    valid_signature = make_hmac(
+        GATEWAY_SERVICE_SECRET,
+        method,
+        service_path,
+        timestamp,
+        nonce,
+        original_body,
+    )
+
+    # ===== 2. Tampered body: đổi 1 ký tự/nội dung nhỏ 10000 -> 10001 =====
+    tampered_body_obj = {
+        "from_account": "ACC001",
+        "to_account": "ACC002",
+        "amount": 10001,
+        "description": "valid hmac security demo"
+    }
+    tampered_body = json.dumps(tampered_body_obj, separators=(",", ":"), sort_keys=True)
+
+    # ===== 3. Fake signature =====
+    fake_timestamp = str(int(time.time()))
+    fake_nonce = secrets.token_hex(16)
+
+    # ===== 4. Replay: 2 request dùng cùng timestamp + nonce + signature + body =====
+    replay_timestamp = str(int(time.time()))
+    replay_nonce = secrets.token_hex(16)
+    replay_body_obj = {
+        "from_account": "ACC001",
+        "to_account": "ACC002",
+        "amount": 10000,
+        "description": "replay hmac security demo"
+    }
+    replay_body = json.dumps(replay_body_obj, separators=(",", ":"), sort_keys=True)
+    replay_signature = make_hmac(
+        GATEWAY_SERVICE_SECRET,
+        method,
+        service_path,
+        replay_timestamp,
+        replay_nonce,
+        replay_body,
+    )
+
+    token_placeholder = "<TOKEN_MOI>"
+    device_placeholder = "<DEVICE_ID>"
+
+    # Các header X-User-* được đưa vào curl vì gọi thẳng microservice,
+    # còn request bình thường qua Gateway thì Gateway tự thêm các header này.
+    def build_curl(body: str, ts: str, nc: str, sig: str) -> str:
+        return f'''curl -i {transfer_url}/transfer \\
+  -X POST \\
+  -H "Authorization: Bearer {token_placeholder}" \\
+  -H "X-Device-Id: {device_placeholder}" \\
+  -H "X-User-Id: {verified_user}" \\
+  -H "X-User-Email: {verified_email}" \\
+  -H "X-User-Roles: {','.join(verified_roles)}" \\
+  -H "Content-Type: application/json" \\
+  -H "X-Gateway-Timestamp: {ts}" \\
+  -H "X-Gateway-Nonce: {nc}" \\
+  -H "X-Gateway-Signature: {sig}" \\
+  -d '{body}' '''
+
+    valid_curl = build_curl(original_body, timestamp, nonce, valid_signature)
+    tampered_body_curl = build_curl(tampered_body, timestamp, nonce, valid_signature)
+    fake_signature_curl = build_curl(original_body, fake_timestamp, fake_nonce, "fake-signature")
+    replay_first_curl = build_curl(replay_body, replay_timestamp, replay_nonce, replay_signature)
+    replay_second_curl = build_curl(replay_body, replay_timestamp, replay_nonce, replay_signature)
+
+    return {
+        "demo": "Signed Transfer Request Demo",
+        "enabled_by": "ENABLE_SECURITY_DEMO=true",
+        "warning": "Endpoint chỉ dùng cho demo. Sau khi thuyết trình nên tắt ENABLE_SECURITY_DEMO=false.",
+        "cryptography": {
+            "algorithm": "HMAC-SHA256",
+            "canonical_request": "METHOD|PATH|TIMESTAMP|NONCE|BODY",
+            "signed_path": service_path,
+            "timestamp_nonce_replay_protection": True,
+            "device_binding_required": True,
+        },
+        "authenticated_user": {
+            "user": verified_user,
+            "email": verified_email,
+            "roles": verified_roles,
+            "device_id_present": bool(x_device_id),
+        },
+        "valid_request": {
+            "method": method,
+            "url": f"{transfer_url}/transfer",
+            "body_signed": original_body_obj,
+            "timestamp": timestamp,
+            "nonce": nonce,
+            "signature": valid_signature,
+            "expected_result": "200 nếu dữ liệu nghiệp vụ hợp lệ; nếu bị lỗi nghiệp vụ thì HMAC vẫn đã được tạo hợp lệ.",
+        },
+        "tampered_body_request": {
+            "description": "Body bị đổi 1 ký tự/nội dung nhỏ: amount 10000 -> 10001 nhưng vẫn dùng signature của body gốc.",
+            "original_amount": 10000,
+            "tampered_amount": 10001,
+            "expected_result": "401 Invalid Gateway signature",
+        },
+        "fake_signature_request": {
+            "description": "Timestamp còn mới nhưng signature là fake-signature.",
+            "expected_result": "401 Invalid Gateway signature",
+        },
+        "replay_request": {
+            "description": "Chạy replay_first_curl trước, sau đó chạy replay_second_curl với cùng timestamp + nonce + signature.",
+            "expected_result": "Lần đầu có thể hợp lệ nếu request chưa dùng nonce; lần hai phải bị chặn nếu nonce store hoạt động.",
+            "timestamp": replay_timestamp,
+            "nonce": replay_nonce,
+            "signature": replay_signature,
+        },
+        "valid_curl": valid_curl,
+        "tampered_body_curl": tampered_body_curl,
+        "fake_signature_curl": fake_signature_curl,
+        "replay_first_curl": replay_first_curl,
+        "replay_second_curl": replay_second_curl,
+    }
+
+
 @app.get("/health")
 async def health():
-    return {"status": "ok", "services": list(SERVICE_MAP.keys())}
+    return {
+        "status": "ok",
+        "services": list(SERVICE_MAP.keys()),
+        "security_demo_enabled": ENABLE_SECURITY_DEMO,
+    }
 
 
 if __name__ == "__main__":
