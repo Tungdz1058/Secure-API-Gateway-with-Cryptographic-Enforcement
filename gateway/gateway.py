@@ -248,117 +248,6 @@ async def verify_request_with_auth_service(
     return verify_data
 
 
-# ========== MAIN ROUTE ==========
-@app.api_route("/api/{service}/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-async def gateway(request: Request, service: str, path: str):
-    service_url = SERVICE_MAP.get(service)
-    if not service_url:
-        raise HTTPException(status_code=404, detail=f"Service {service} not found")
-
-    logger.info(f"📨 Request: {request.method} /api/{service}/{path}")
-    body_bytes = await request.body()
-    body_str = body_bytes.decode() if body_bytes else ""
-    x_device_id = request.headers.get("x-device-id", "")
-
-    verified_user = ""
-    verified_email = ""
-    verified_roles: list[str] = []
-
-    # ===== METHOD ALLOWLIST =====
-    # Chặn method không hợp lệ ngay tại Gateway trước khi verify/forward.
-    if service in METHOD_ALLOWLIST and request.method not in METHOD_ALLOWLIST[service]:
-        raise HTTPException(
-            status_code=405,
-            detail=f"Method {request.method} not allowed for service {service}"
-        )
-
-    # ===== AUTHENTICATION & AUTHORIZATION =====
-    # Frontend gửi Bearer token + X-Device-Id. Gateway tự ký HMAC nội bộ khi hỏi Auth Service.
-    if service in ROLE_REQUIREMENTS:
-        authorization = request.headers.get("authorization")
-        required_roles = ROLE_REQUIREMENTS[service]
-
-        original_path = f"/api/{service}/{path}"
-        original_method = request.method
-
-        verify_data = await verify_request_with_auth_service(
-            authorization=authorization,
-            x_device_id=x_device_id,
-            required_roles=required_roles,
-            original_method=original_method,
-            original_path=original_path,
-            body_str=body_str,
-        )
-
-        verified_roles = verify_data.get("roles", []) or []
-        verified_user = verify_data.get("user", "") or ""
-        verified_email = verify_data.get("email", "") or ""
-
-    # ===== FORWARD REQUEST =====
-    if service in PREFIX_SERVICES:
-        forward_path = f"{service}/{path}"
-    else:
-        forward_path = path
-
-    headers = dict(request.headers)
-    headers.pop("host", None)
-
-    # Không forward HMAC cũ từ client. Client không còn giữ secret.
-    # Nếu attacker tự thêm X-Gateway-* hoặc X-User-* vào request, Gateway sẽ xóa rồi tự tạo lại.
-    for h in [
-        "x-timestamp", "x-nonce", "x-signature",
-        "x-gateway-timestamp", "x-gateway-nonce", "x-gateway-signature",
-        "x-original-path", "x-original-method",
-        "x-user-id", "x-user-email", "x-user-roles",
-    ]:
-        headers.pop(h, None)
-
-    # Với business microservice, Gateway ký request nội bộ để chặn gọi thẳng service.
-    if service in ROLE_REQUIREMENTS:
-        service_path = f"/{forward_path}"
-        service_timestamp = str(int(time.time()))
-        service_nonce = secrets.token_hex(16)
-        service_signature = make_hmac(
-            GATEWAY_SERVICE_SECRET,
-            request.method,
-            service_path,
-            service_timestamp,
-            service_nonce,
-            body_str,
-        )
-        headers["X-Gateway-Timestamp"] = service_timestamp
-        headers["X-Gateway-Nonce"] = service_nonce
-        headers["X-Gateway-Signature"] = service_signature
-        headers["X-User-Id"] = verified_user
-        headers["X-User-Email"] = verified_email
-        headers["X-User-Roles"] = ",".join(verified_roles)
-        headers["X-Device-Id"] = x_device_id
-
-    try:
-        response = await request_with_retry(
-            request.method,
-            f"{service_url}/{forward_path}",
-            headers=headers,
-            content=body_bytes,
-        )
-    except (httpx.ConnectError, httpx.ConnectTimeout):
-        raise HTTPException(status_code=503, detail=f"Service {service} unavailable")
-    except (httpx.ReadTimeout, httpx.PoolTimeout):
-        raise HTTPException(status_code=504, detail=f"Service {service} timeout")
-
-    if response.status_code == 429:
-        raise HTTPException(status_code=429, detail=f"Service {service} đang quá tải, thử lại sau")
-
-    try:
-        data = response.json()
-    except Exception:
-        return {"error": "Service error", "status": response.status_code, "body": response.text[:200]}
-
-    if response.status_code >= 400:
-        raise HTTPException(status_code=response.status_code, detail=data.get("detail", data))
-    return data
-
-
 # ========== SECURITY DEMO ENDPOINTS ==========
 @app.get("/api/security-demo/signed-transfer-request")
 async def signed_transfer_request_demo(request: Request):
@@ -526,6 +415,119 @@ async def signed_transfer_request_demo(request: Request):
         "replay_first_curl": replay_first_curl,
         "replay_second_curl": replay_second_curl,
     }
+
+# ========== MAIN ROUTE ==========
+@app.api_route("/api/{service}/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def gateway(request: Request, service: str, path: str):
+    service_url = SERVICE_MAP.get(service)
+    if not service_url:
+        raise HTTPException(status_code=404, detail=f"Service {service} not found")
+
+    logger.info(f"📨 Request: {request.method} /api/{service}/{path}")
+    body_bytes = await request.body()
+    body_str = body_bytes.decode() if body_bytes else ""
+    x_device_id = request.headers.get("x-device-id", "")
+
+    verified_user = ""
+    verified_email = ""
+    verified_roles: list[str] = []
+
+    # ===== METHOD ALLOWLIST =====
+    # Chặn method không hợp lệ ngay tại Gateway trước khi verify/forward.
+    if service in METHOD_ALLOWLIST and request.method not in METHOD_ALLOWLIST[service]:
+        raise HTTPException(
+            status_code=405,
+            detail=f"Method {request.method} not allowed for service {service}"
+        )
+
+    # ===== AUTHENTICATION & AUTHORIZATION =====
+    # Frontend gửi Bearer token + X-Device-Id. Gateway tự ký HMAC nội bộ khi hỏi Auth Service.
+    if service in ROLE_REQUIREMENTS:
+        authorization = request.headers.get("authorization")
+        required_roles = ROLE_REQUIREMENTS[service]
+
+        original_path = f"/api/{service}/{path}"
+        original_method = request.method
+
+        verify_data = await verify_request_with_auth_service(
+            authorization=authorization,
+            x_device_id=x_device_id,
+            required_roles=required_roles,
+            original_method=original_method,
+            original_path=original_path,
+            body_str=body_str,
+        )
+
+        verified_roles = verify_data.get("roles", []) or []
+        verified_user = verify_data.get("user", "") or ""
+        verified_email = verify_data.get("email", "") or ""
+
+    # ===== FORWARD REQUEST =====
+    if service in PREFIX_SERVICES:
+        forward_path = f"{service}/{path}"
+    else:
+        forward_path = path
+
+    headers = dict(request.headers)
+    headers.pop("host", None)
+
+    # Không forward HMAC cũ từ client. Client không còn giữ secret.
+    # Nếu attacker tự thêm X-Gateway-* hoặc X-User-* vào request, Gateway sẽ xóa rồi tự tạo lại.
+    for h in [
+        "x-timestamp", "x-nonce", "x-signature",
+        "x-gateway-timestamp", "x-gateway-nonce", "x-gateway-signature",
+        "x-original-path", "x-original-method",
+        "x-user-id", "x-user-email", "x-user-roles",
+    ]:
+        headers.pop(h, None)
+
+    # Với business microservice, Gateway ký request nội bộ để chặn gọi thẳng service.
+    if service in ROLE_REQUIREMENTS:
+        service_path = f"/{forward_path}"
+        service_timestamp = str(int(time.time()))
+        service_nonce = secrets.token_hex(16)
+        service_signature = make_hmac(
+            GATEWAY_SERVICE_SECRET,
+            request.method,
+            service_path,
+            service_timestamp,
+            service_nonce,
+            body_str,
+        )
+        headers["X-Gateway-Timestamp"] = service_timestamp
+        headers["X-Gateway-Nonce"] = service_nonce
+        headers["X-Gateway-Signature"] = service_signature
+        headers["X-User-Id"] = verified_user
+        headers["X-User-Email"] = verified_email
+        headers["X-User-Roles"] = ",".join(verified_roles)
+        headers["X-Device-Id"] = x_device_id
+
+    try:
+        response = await request_with_retry(
+            request.method,
+            f"{service_url}/{forward_path}",
+            headers=headers,
+            content=body_bytes,
+        )
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        raise HTTPException(status_code=503, detail=f"Service {service} unavailable")
+    except (httpx.ReadTimeout, httpx.PoolTimeout):
+        raise HTTPException(status_code=504, detail=f"Service {service} timeout")
+
+    if response.status_code == 429:
+        raise HTTPException(status_code=429, detail=f"Service {service} đang quá tải, thử lại sau")
+
+    try:
+        data = response.json()
+    except Exception:
+        return {"error": "Service error", "status": response.status_code, "body": response.text[:200]}
+
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail=data.get("detail", data))
+    return data
+
+
+
 
 
 @app.get("/health")
