@@ -2,8 +2,9 @@ import os
 import time
 import hashlib
 import hmac
+import json
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -95,17 +96,48 @@ def cleanup_nonces():
             del nonce_store[n]
 
 # ========== SESSION FUNCTIONS ==========
-def get_active_session(user_id: str) -> Optional[str]:
+def get_active_session(user_id: str) -> Optional[dict[str, Any]]:
+    """Return active session metadata.
+
+    New format stores a JSON/dict object:
+    {token_hash, device_id, created_at}.
+    A small backward-compatible branch is kept in case old sessions still contain
+    only a token hash string.
+    """
     if USE_REDIS:
-        return redis_client.get(f"active_session:{user_id}")
-    return active_sessions.get(user_id)
+        raw = redis_client.get(f"active_session:{user_id}")
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            return {"token_hash": raw, "device_id": None}
+        return None
+
+    raw = active_sessions.get(user_id)
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        return {"token_hash": raw, "device_id": None}
+    return None
 
 
-def set_active_session(user_id: str, token_hash: str):
+def set_active_session(user_id: str, token_hash: str, device_id: str):
+    session_data = {
+        "token_hash": token_hash,
+        "device_id": device_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
     if USE_REDIS:
-        redis_client.setex(f"active_session:{user_id}", SESSION_EXPIRY, token_hash)
+        redis_client.setex(
+            f"active_session:{user_id}",
+            SESSION_EXPIRY,
+            json.dumps(session_data),
+        )
     else:
-        active_sessions[user_id] = token_hash
+        active_sessions[user_id] = session_data
 
 
 def clear_active_session(user_id: str):
@@ -136,7 +168,7 @@ def get_roles(payload: dict) -> list[str]:
     return payload.get("https://api-gateway-demo.com/roles", []) or payload.get("roles", []) or []
 
 
-def verify_jwt(token: str, check_session: bool = True) -> dict:
+def verify_jwt(token: str, check_session: bool = True, device_id: Optional[str] = None) -> dict:
     token_hash = hashlib.sha256(token.encode()).hexdigest()
 
     if is_token_revoked(token_hash):
@@ -154,13 +186,21 @@ def verify_jwt(token: str, check_session: bool = True) -> dict:
 
     if check_session:
         user_id = payload.get("sub")
-        active_token_hash = get_active_session(user_id)
+        active_session = get_active_session(user_id)
 
-        if not active_token_hash:
+        if not active_session:
             raise HTTPException(status_code=401, detail="No active session - please login")
 
+        active_token_hash = active_session.get("token_hash")
         if active_token_hash != token_hash:
             raise HTTPException(status_code=401, detail="Token invalid - new session")
+
+        expected_device_id = active_session.get("device_id")
+        if not device_id:
+            raise HTTPException(status_code=401, detail="Missing device id")
+
+        if expected_device_id and expected_device_id != device_id:
+            raise HTTPException(status_code=401, detail="Device binding mismatch")
 
     return payload
 
@@ -205,6 +245,7 @@ async def verify_endpoint(
     x_gateway_nonce: str = Header(None),
     x_gateway_signature: str = Header(None),
     x_required_role: str = Header(None),
+    x_device_id: str = Header(None),
 ):
     """Verify JWT/session/role and the Gateway's internal HMAC signature.
 
@@ -215,7 +256,7 @@ async def verify_endpoint(
     token = authorization.split(" ")[1]
 
     try:
-        jwt_payload = verify_jwt(token, check_session=True)
+        jwt_payload = verify_jwt(token, check_session=True, device_id=x_device_id)
     except ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except InvalidTokenError as e:
@@ -253,7 +294,7 @@ async def verify_endpoint(
 
 
 @app.post("/auth/login")
-async def login_endpoint(authorization: str = Header(None)):
+async def login_endpoint(authorization: str = Header(None), x_device_id: str = Header(None)):
     """Login after Auth0 callback.
 
     Frontend calls this once with Bearer id_token. Auth Service verifies Auth0 JWT
@@ -262,6 +303,8 @@ async def login_endpoint(authorization: str = Header(None)):
     """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Authorization header")
+    if not x_device_id:
+        raise HTTPException(status_code=401, detail="Missing device id")
     token = authorization.split(" ")[1]
 
     try:
@@ -273,24 +316,28 @@ async def login_endpoint(authorization: str = Header(None)):
     token_hash = hashlib.sha256(token.encode()).hexdigest()
 
     clear_active_session(user_id)
-    set_active_session(user_id, token_hash)
+    set_active_session(user_id, token_hash, x_device_id)
 
     return {
         "message": "Login successful",
         "user": user_id,
         "email": payload.get("email", user_id),
         "roles": get_roles(payload),
+        "device_bound": True,
+        "device_id_preview": x_device_id[:8] + "..." if len(x_device_id) > 8 else x_device_id,
     }
 
 
 @app.post("/auth/revoke")
-async def revoke_token_endpoint(authorization: str = Header(None)):
+async def revoke_token_endpoint(authorization: str = Header(None), x_device_id: str = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Authorization header")
+    if not x_device_id:
+        raise HTTPException(status_code=401, detail="Missing device id")
     token = authorization.split(" ")[1]
 
     try:
-        payload = verify_jwt(token)
+        payload = verify_jwt(token, check_session=True, device_id=x_device_id)
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
 
